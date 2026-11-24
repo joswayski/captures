@@ -875,7 +875,7 @@ fn run(options: &Options, action: Action) {
         Action::Preferences | Action::LeftClick => open_preferences(options),
         Action::History => {
             if let Err(error) = crate::history::open(options, None) {
-                eprintln!("couldn't open Capture History: {error}");
+                show_error(&format!("Couldn't open Capture History: {error}"));
             }
         }
         Action::OpenOutputFolder => {
@@ -888,7 +888,7 @@ fn run(options: &Options, action: Action) {
                     .map(drop)
             });
             if let Err(error) = opened {
-                eprintln!("Could not open the save location: {error}");
+                show_error(&format!("Could not open the save location: {error}"));
             }
         }
         Action::Quit => unsafe { PostQuitMessage(0) },

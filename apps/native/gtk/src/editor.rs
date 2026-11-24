@@ -25,8 +25,8 @@ use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, brush_cursor, h
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget};
 use captures_app::editor_image_background::BrushMode;
 use captures_app::editor_session::{
-    EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImageDropGuide,
-    OpenRequest, PngOptions, Request,
+    DraftAutosave, EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize,
+    ImageDropGuide, OpenRequest, PngOptions, Request,
 };
 use captures_app::editor_viewport::{self, Viewport};
 use gtk::prelude::*;
@@ -135,6 +135,9 @@ enum Job {
         options: ExportOptions,
         mode: captures_capture::CaptureMode,
     },
+    /// Write the draft in the background, `DraftAutosave::DELAY` after an
+    /// edit, as the Windows and macOS editors do.
+    Autosave,
 }
 
 enum ImportSource {
@@ -157,6 +160,12 @@ enum Outcome {
         >,
     ),
     Failed(String),
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
 /// Refresh the row thumbnails (only changed layers re-render), then present.
@@ -389,6 +398,9 @@ struct State {
     /// Shipping `panReady`: Ctrl is held outside a control, so a drag pans
     /// with any tool.
     pan_ready: Cell<bool>,
+    /// The pending background draft save and its wake-up.
+    autosave: RefCell<DraftAutosave>,
+    autosave_timer: RefCell<Option<glib::SourceId>>,
     widgets: Widgets,
 }
 
@@ -566,6 +578,14 @@ pub fn build(
                             editor_export::publish(&root, &session.pixels(), &plan, options, mode)
                                 .map(|saved| (plan, saved)),
                         ),
+                        Job::Autosave => {
+                            if let Err(error) = session.execute(Request::AutosaveDraft {
+                                updated_at_ms: now_ms(),
+                            }) {
+                                eprintln!("draft autosave failed: {error}");
+                            }
+                            continue;
+                        }
                     };
                     if results.send(outcome).is_err() {
                         break;
@@ -1102,6 +1122,8 @@ pub fn build(
         drop_label,
         trim_hover: Cell::default(),
         pan_ready: Cell::default(),
+        autosave: RefCell::default(),
+        autosave_timer: RefCell::default(),
         properties,
         pointer: Cell::default(),
         preview_busy: Cell::default(),
@@ -1163,11 +1185,14 @@ pub fn build(
             && let Ok(mut session) = state.session.lock()
             && let Some(session) = session.as_mut()
         {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as u64);
+            if let Some(timer) = state.autosave_timer.take() {
+                timer.remove();
+            }
+            state.autosave.borrow_mut().cancel();
             state.commit_text_for_close(session);
-            let _ = session.execute(Request::AutosaveDraft { updated_at_ms: now });
+            let _ = session.execute(Request::AutosaveDraft {
+                updated_at_ms: now_ms(),
+            });
         }
         glib::Propagation::Proceed
     });
@@ -1925,6 +1950,37 @@ impl State {
         popover.popup();
     }
 
+    /// Schedule the pending draft save. The session refuses drafts while a
+    /// label is open; finishing it presents a new frame, which arms again.
+    fn arm_autosave(&self) {
+        if let Some(timer) = self.autosave_timer.take() {
+            timer.remove();
+        }
+        let Some(due) = self.autosave.borrow().deadline() else {
+            return;
+        };
+        let weak = self.me.clone();
+        let delay = due.saturating_duration_since(std::time::Instant::now());
+        let timer = glib::timeout_add_local_once(delay, move || {
+            let Some(state) = weak.upgrade() else { return };
+            // Fired: the source is gone, so drop its id without removing it.
+            state.autosave_timer.take();
+            if state.inline.borrow().is_some() {
+                return;
+            }
+            if state
+                .autosave
+                .borrow_mut()
+                .take_due(std::time::Instant::now())
+            {
+                let _ = state.jobs.send(Job::Autosave);
+            } else {
+                state.arm_autosave();
+            }
+        });
+        *self.autosave_timer.borrow_mut() = Some(timer);
+    }
+
     fn receive(self: &Rc<Self>, outcome: Outcome) {
         match outcome {
             Outcome::Imported(presented, layer) => {
@@ -1971,6 +2027,9 @@ impl State {
                         &self.output_directory,
                         &self.default_stem,
                     ));
+                } else {
+                    self.autosave.borrow_mut().edited(std::time::Instant::now());
+                    self.arm_autosave();
                 }
                 {
                     let mut selected = self.selected.borrow_mut();

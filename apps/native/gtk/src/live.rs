@@ -176,6 +176,19 @@ pub struct Update {
 
 /// Stop accepting forwarded launches and release the profile.
 pub fn stop(host: &Host) {
+    // `GApplication::quit` destroys windows without `close-request`, which is
+    // where an editor commits its open label and flushes its draft. Close the
+    // editors first so tray Quit, SIGTERM (logout) and `--quit-after` keep
+    // unsaved edits, as the update install already does.
+    let editors: Vec<_> = host
+        .editors
+        .borrow()
+        .iter()
+        .map(|(_, editor)| editor.window.clone())
+        .collect();
+    for window in editors {
+        window.close();
+    }
     let recorder = host.recorder.borrow_mut().take();
     if let Some(recorder) = recorder {
         recorder.shutdown();

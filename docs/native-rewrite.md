@@ -8057,3 +8057,32 @@ show/defer/dedupe/tray decisions, the smoke's `update_card`, `notices`,
 headless Sway 1.9. A real release check, download and AppImage install from
 the notice, a real `.deb`, focus behaviour under a real window manager and
 Orca are unverified. Windows, macOS: unchanged.
+
+### Performance and UX pass (November 2026)
+
+Shared (every host): an inline text keystroke no longer recomposites the
+canvas, since the edited layer is hidden and nothing else can change while the
+input is open; only its geometry is measured again. Compositing copies fully
+opaque rows as bytes when building the source pixmap and composing back, and a
+transparent editor background starts from a zeroed buffer. The default Save
+(PNG, Preserve) reuses History's PNG as the export (the same bytes) instead of
+encoding the frame twice, and other formats encode alongside History's pair.
+The recording editor's unedited source frame uses the fast preview PNG level,
+like edited preview frames (lossless, same pixels).
+
+GTK: the screenshot editor now autosaves its draft 700 ms after each edit on
+its worker through `DraftAutosave`, waiting while a label is open, as the
+Win32 and AppKit editors do. Quitting (tray Quit, SIGTERM, `--quit-after`)
+closes open editors first, because `GApplication::quit` skips
+`close-request`, where the draft is flushed. In Capture History, Escape
+disarms an armed Delete, Delete all or recovery Discard, as on macOS.
+
+Win32: History's Escape disarms the same confirmations. The tray's Capture
+History and Open Save Location failures now show an error dialog instead of
+only writing to the absent console.
+
+X11: verified under Xvfb with the smoke's `history` (Escape disarming Delete
+all), `editor_close_keeps_open_text` and new `editor_autosave_survives_kill`
+(an edit restored after SIGKILL) steps, and shared crate tests. Wayland:
+not run. Windows: built on CI only. macOS: unchanged apart from the shared
+crates; not run.

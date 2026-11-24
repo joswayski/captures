@@ -1543,6 +1543,37 @@ impl History {
         self.reload();
     }
 
+    /// Disarm every pending two-step confirmation at once, as `expire` does
+    /// when they time out; false when none was armed.
+    fn cancel_confirmations(&mut self) -> bool {
+        let mut any = false;
+        if self.confirm_all.is_some() {
+            self.disarm_all();
+            any = true;
+        }
+        self.discard_deadline = None;
+        if let Some(serial) = self.discard_armed.take() {
+            self.events.push(Event::Name(Target::Discard(serial)));
+            self.relayout = true;
+            any = true;
+        }
+        let armed: Vec<u32> = self
+            .items
+            .iter()
+            .filter(|item| item.confirm.is_some())
+            .map(|item| item.serial)
+            .collect();
+        for serial in armed {
+            if let Some(item) = self.item_mut(serial) {
+                item.confirm = None;
+            }
+            self.events.push(Event::Name(Target::Delete(serial)));
+            self.restyle(serial);
+            any = true;
+        }
+        any
+    }
+
     /// Expire two-step deletes and re-arm the timer for the next deadline.
     fn expire(&mut self) {
         let now = Instant::now();
@@ -3670,6 +3701,9 @@ impl History {
                             self.end_drag(serial, None);
                         }
                     }
+                    // Escape backs out of an armed Delete, Delete all or
+                    // recovery Discard, as the macOS History does.
+                    VK_ESCAPE if self.cancel_confirmations() => {}
                     VK_TAB => self.focus_step(!shift),
                     VK_SPACE | VK_RETURN => {
                         if let Some(focus) = self.focus {

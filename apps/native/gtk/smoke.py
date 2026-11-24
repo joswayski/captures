@@ -412,6 +412,16 @@ def history(binary, scratch):
         wait(lambda: len(list(root.iterdir())) == before - 1, "the entry removed from disk")
         wait(lambda: find(app, "push button", "All 999"), "the count to drop to 999")
         print("history: filter and two-step delete passed")
+
+        delete_all = find(app, "push button", "Delete all captures")[0]
+        press(delete_all)
+        wait(lambda: find(app, "push button", "Confirm delete all captures"), "the armed Delete all", 3)
+        DESKTOP.focus(DESKTOP.window("Capture History"))
+        DESKTOP.key("Escape")
+        # Well inside shipping's 4 s, so the timeout cannot be what disarms it.
+        wait(lambda: find(app, "push button", "Delete all captures"), "Escape to disarm Delete all", 2)
+        assert len(list(root.iterdir())) == before - 1, "Escape deleted entries"
+        print("history: Escape disarmed Delete all")
     finally:
         process.terminate()
         process.wait(timeout=10)
@@ -959,6 +969,55 @@ def editor_close_keeps_open_text(binary, scratch):
         wait(lambda: find(app, "list item", "OPEN · Text") and find(app, "list item", "abc · Text"),
              "the reopened draft to restore both labels")
         print("editor: closing with a label open kept it and the committed one in the draft")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
+def editor_autosave_survives_kill(binary, scratch):
+    """An edit reaches the draft in the background shortly after it is made,
+    so a killed app (crash, OOM, forced logout) still restores it."""
+    # Its own folder: drafts live in the History root's `editor-drafts` sibling.
+    root = scratch / "autosave" / "history"
+    write_history_entries(root, 1)
+    settings = str(scratch / "autosave-settings.json")
+
+    def open_editor(process):
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        press(wait(lambda: find(app, "push button", "Open screenshot in editor"), "Edit")[0])
+        wait(lambda: find(app, "list item", "Original screenshot · Locked background"),
+             "the background layer")
+        return app, DESKTOP.window("Captures Screenshot Editor", process.pid)
+
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", settings, "--size", "1020x720")
+    try:
+        app, window = open_editor(process)
+        tool = find(app, "push button", "Text (T)")[0]
+        press(tool)
+        wait(lambda: has_state(tool, Atspi.StateType.PRESSED), "the Text tool")
+        DESKTOP.focus(window)
+        canvas = find(app, "image", "Screenshot canvas")[0]
+        extents = canvas.get_extents(Atspi.CoordType.WINDOW)
+        origin_x, origin_y = DESKTOP.origin(window)
+        DESKTOP.click(origin_x + extents.x + 120, origin_y + extents.y + 120)
+        field = wait(lambda: find(app, "text", "Edit text on canvas"), "the inline field")[0]
+        wait(lambda: has_state(field, Atspi.StateType.FOCUSED), "the field to take focus")
+        DESKTOP.type("kept")
+        DESKTOP.key("Escape")
+        wait(lambda: not find(app, "text", "Edit text on canvas"), "Escape to commit kept")
+        wait(lambda: find(app, "list item", "kept · Text"), "the kept layer")
+        drafts = root.with_name("editor-drafts")
+        wait(lambda: any(drafts.glob("*/manifest.json")), "the background autosave", 5)
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", settings, "--size", "1020x720")
+    try:
+        app, _ = open_editor(process)
+        wait(lambda: find(app, "list item", "kept · Text"), "the killed editor's label restored")
+        print("editor: an autosaved edit survived SIGKILL")
     finally:
         process.terminate()
         process.wait(timeout=10)
@@ -3325,7 +3384,7 @@ def wayland_recording(binary, scratch):
         subprocess.run(["swaymsg", "output * bg #234567 solid_color"], stdout=subprocess.DEVNULL)
 
 
-STEPS = [history, preferences, update_card, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
+STEPS = [history, preferences, update_card, editor, editor_close_keeps_open_text, editor_autosave_survives_kill, recording, recording_controls, recording_menu,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
          new_capture, tray, shortcuts, setup, crash_review, notices, recording_ready,
          update_notice_live,

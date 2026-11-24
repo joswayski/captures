@@ -243,6 +243,27 @@ pub fn build(
     });
     window.set_child(Some(&watch));
     window.connect_realize(|w| crate::capture_bar::point_at_buttons(w.upcast_ref()));
+    // Escape backs out of an armed Delete, Delete all or recovery Discard
+    // before its four seconds run out, as the macOS History does.
+    let keys = gtk::EventControllerKey::new();
+    let weak = Rc::downgrade(&state);
+    keys.connect_key_pressed(move |_, key, _, modifiers| {
+        if key != gdk::Key::Escape
+            || modifiers.intersects(
+                gdk::ModifierType::CONTROL_MASK
+                    | gdk::ModifierType::SHIFT_MASK
+                    | gdk::ModifierType::ALT_MASK
+                    | gdk::ModifierType::SUPER_MASK,
+            )
+        {
+            return glib::Propagation::Proceed;
+        }
+        match weak.upgrade() {
+            Some(state) if state.cancel_confirmations() => glib::Propagation::Stop,
+            _ => glib::Propagation::Proceed,
+        }
+    });
+    window.add_controller(keys);
 
     state.rebuild();
     state.reload();
@@ -542,6 +563,27 @@ impl State {
             card.restyle(self);
             true
         });
+    }
+
+    /// Disarm every pending two-step confirmation; false when none was armed.
+    fn cancel_confirmations(self: &Rc<Self>) -> bool {
+        let item = self.confirming.borrow_mut().take();
+        let all = self.confirming_all.borrow_mut().take();
+        let discard = self.discard_armed.borrow_mut().take();
+        let any = item.is_some() || all.is_some() || discard.is_some();
+        if let Some((_, timer)) = item {
+            timer.remove();
+            self.restyle_cards();
+        }
+        if let Some(timer) = all {
+            timer.remove();
+            self.update_chrome();
+        }
+        if let Some((_, timer)) = discard {
+            timer.remove();
+            self.render_recovery();
+        }
+        any
     }
 
     /// Shipping's two-step Delete: arm for four seconds, delete on the
