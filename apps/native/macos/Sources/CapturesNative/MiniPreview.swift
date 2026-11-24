@@ -704,7 +704,7 @@ final class MiniPreviewClipboardChip: NSView {
 final class MiniPreviewCardView: NSView, NSDraggingSource {
     static let savedFeedbackDuration: TimeInterval = 1
     private let tokens: Tokens
-    private let mirrored: Bool
+    fileprivate let mirrored: Bool
     private let imageView: MiniPreviewImageView
     /// `.thumbnail-media`: clips the hover blur and scale to the rounded card.
     private let mediaClip = NSView()
@@ -1244,6 +1244,15 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         return responder.isDescendant(of: self)
     }
 
+    /// A card moved into a rebuilt stack starts like a new one: outside the
+    /// pointer, which may no longer be over its new frame, and without a
+    /// settle that targets its old slot.
+    fileprivate func resetForReuse() {
+        layer?.removeAnimation(forKey: "preview-settle-position")
+        pointerInside = false
+        refreshChrome()
+    }
+
     /// Pointer hover (once unlocked) or key-window focus within keeps chrome up.
     fileprivate func refreshChrome() {
         guard !isExiting else { return }
@@ -1762,6 +1771,10 @@ final class MiniPreviewView: NSView {
     private var dustOverlays: [String: PreviewMotionOverlay] = [:]
     /// The latest list <-> pile flight; an older flight's end never lands.
     private var flyToken = 0
+    /// When the latest flight ends; cards still flying are not reused.
+    private var flyUntil: CFTimeInterval = 0
+    /// Cards taken over from the previous stack instead of being rebuilt.
+    private var reusedArtifactIDs: Set<String> = []
     /// An old toolbar entrance cannot unlock a newer leaving/clearing toolbar.
     private var toolbarToken = 0
     /// Dust chips on screen, for tests.
@@ -1811,7 +1824,8 @@ final class MiniPreviewView: NSView {
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          discard: @escaping (String) -> Void = { _ in },
          setCollapsed: @escaping (Bool) -> Void,
-         clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
+         clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in },
+         reusing previous: MiniPreviewView? = nil) {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
         self.hoverLayouts = hoverLayouts; anchoredAtTop = topAnchor
         anchoredRight = rightAnchor; stackCollapsed = collapsed
@@ -1838,16 +1852,31 @@ final class MiniPreviewView: NSView {
             height: documentHeight)
         scroll.documentView = document
 
+        // An arrival keeps the expanded list's settled cards: building and
+        // first drawing every card again cost 45-55 ms with five on screen.
+        let reusable = previous.flatMap { previous in
+            !collapsed && !previous.stackCollapsed && previous.flyUntil <= CACurrentMediaTime() ? previous : nil
+        }
         for id in ids {
             guard let resource = resources[id], let layout = layouts[id] else { continue }
-            let card = MiniPreviewCardView(frame: NSRect(x: padding, y: CGFloat(layout.y),
-                width: cardWidth, height: cardHeight), artifactID: id,
-                image: resource.image, tokens: tokens,
-                width: resource.artifact.width, height: resource.artifact.height,
-                sizeBytes: resource.artifact.sizeBytes,
-                saved: resource.artifact.savedPath != nil, rightAnchor: rightAnchor,
-                copy: { copy(id) }, save: { save(id) }, open: { open(id) },
-                trash: { trash(id) }, dismiss: { dismiss(id) }, discard: { discard(id) })
+            let frame = NSRect(x: padding, y: CGFloat(layout.y), width: cardWidth, height: cardHeight)
+            let card: MiniPreviewCardView
+            if let reusable, let old = reusable.cards[id], !old.isExiting, old.mirrored == rightAnchor,
+               old.frame.size == frame.size, reusable.generations[id] == resource.generation {
+                reusable.cards[id] = nil
+                card = old
+                card.frame = frame
+                card.resetForReuse()
+                reusedArtifactIDs.insert(id)
+            } else {
+                card = MiniPreviewCardView(frame: frame, artifactID: id,
+                    image: resource.image, tokens: tokens,
+                    width: resource.artifact.width, height: resource.artifact.height,
+                    sizeBytes: resource.artifact.sizeBytes,
+                    saved: resource.artifact.savedPath != nil, rightAnchor: rightAnchor,
+                    copy: { copy(id) }, save: { save(id) }, open: { open(id) },
+                    trash: { trash(id) }, dismiss: { dismiss(id) }, discard: { discard(id) })
+            }
             card.isHidden = false
             card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
@@ -2257,6 +2286,7 @@ final class MiniPreviewView: NSView {
         }
         flyToken &+= 1
         let token = flyToken
+        flyUntil = CACurrentMediaTime() + fly.duration
         NSAnimationContext.runAnimationGroup { context in
             context.duration = fly.duration
             context.timingFunction = fly.timing
@@ -2321,6 +2351,8 @@ final class MiniPreviewView: NSView {
 
     func setEditorPhase(_ phase: UInt32, for artifactID: String, animated: Bool,
                         continuing previous: MiniPreviewView? = nil) {
+        if previous != nil, reusedArtifactIDs.contains(artifactID),
+           cards[artifactID]?.editorPhase == phase { return }
         let old = previous?.cards[artifactID]
         let survivor = old?.isExiting == false && old?.editorPhase == phase
             && generations[artifactID] == previous?.generations[artifactID] ? old : nil
@@ -2818,13 +2850,14 @@ final class MiniPreviewPanel: NSPanel {
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          discard: @escaping (String) -> Void = { _ in },
          setCollapsed: @escaping (Bool) -> Void,
-         clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
+         clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in },
+         reusing previous: MiniPreviewView? = nil) {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens, pileGravity: pileGravity,
             copy: copy, save: save, open: open, trash: trash, dismiss: dismiss, discard: discard,
-            setCollapsed: setCollapsed, clearAll: clearAll, move: move)
+            setCollapsed: setCollapsed, clearAll: clearAll, move: move, reusing: previous)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
@@ -3135,7 +3168,7 @@ final class MiniPreviewController {
                     }
                     self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image, generation: decodeToken)
                     self.arrivals[artifact.id] = CACurrentMediaTime()
-                    self.makePanel(preservingExits: true)
+                    self.makePanel(preservingExits: true, reusingCards: true)
                     self.updateVisibility()
                     self.panel?.previewView.playArrival(for: artifact.id)
                     // A card appearing under a resting pointer waits for it to move.
@@ -3433,7 +3466,9 @@ final class MiniPreviewController {
         panel?.close(); panel = nil
     }
 
-    private func makePanel(preservingExits: Bool = false) {
+    /// `reusingCards` (a new card arriving) moves the unchanged cards of a
+    /// settled, expanded stack into the new panel instead of rebuilding them.
+    private func makePanel(preservingExits: Bool = false, reusingCards: Bool = false) {
         let previous = panel
         let liveIDs = stack.ids
         var exits = preservingExits ? previous?.previewView.ordinaryExitingArtifactIDs ?? [] : []
@@ -3493,7 +3528,8 @@ final class MiniPreviewController {
             discard: { [weak self] in self?.dismiss($0, exit: .dust) },
             setCollapsed: { [weak self] in self?.setCollapsed($0) },
             clearAll: { [weak self] in self?.clearAll() },
-            move: { [weak self] in self?.moveStack(to: $0) })
+            move: { [weak self] in self?.moveStack(to: $0) },
+            reusing: reusingCards && exits.isEmpty ? previous?.previewView : nil)
         if let view = previous?.previewView, !exits.isEmpty {
             next.previewView.continueExits(from: view, retaining: exits)
             scheduleRebuild(after: max(0, (exitDeadlines.values.max() ?? 0) - CACurrentMediaTime()))
