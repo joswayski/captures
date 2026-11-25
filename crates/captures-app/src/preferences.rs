@@ -395,19 +395,19 @@ pub const MINI_PREVIEW_PLACEMENTS: [(&str, &str); 4] = [
     ("bottom_left", "Bottom left"),
     ("bottom_right", "Bottom right"),
 ];
-/// `mini_preview_drag_style` values and names, the default first.
+/// `mini_preview_drag_style` values and names, in the picker's order.
 pub const MINI_PREVIEW_DRAG_STYLES: [(&str, &str); 3] = [
     ("frosted", "Frosted imprint"),
     ("dock", "Dock gap"),
     ("well", "Quiet well"),
 ];
 
-/// The drag style's name, falling back to the default (Frosted imprint).
+/// The drag style's name, falling back to the default (Dock gap).
 pub fn mini_preview_drag_style_name(value: &str) -> &'static str {
     MINI_PREVIEW_DRAG_STYLES
         .iter()
         .find(|(id, _)| *id == value)
-        .map_or(MINI_PREVIEW_DRAG_STYLES[0].1, |(_, name)| name)
+        .map_or(MINI_PREVIEW_DRAG_STYLES[1].1, |(_, name)| name)
 }
 
 pub const MINI_PREVIEW_POSITION_LABEL: &str = "Mini preview position";
@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(mini_preview_placement_name("top_right"), "Top right");
         assert_eq!(mini_preview_placement_name("nope"), "Bottom left");
         assert_eq!(mini_preview_drag_style_name("well"), "Quiet well");
-        assert_eq!(mini_preview_drag_style_name("nope"), "Frosted imprint");
+        assert_eq!(mini_preview_drag_style_name("nope"), "Dock gap");
         // The persisted values are the setting's own serde names.
         for (id, _) in MINI_PREVIEW_DRAG_STYLES {
             let parsed: captures_settings::MiniPreviewDragStyle =

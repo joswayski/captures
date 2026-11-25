@@ -6406,22 +6406,29 @@ AppKit uses `NSDraggingSource`; wgpu uses Windows `drag` 2.1.1/OLE and a private
 winit 0.30.13 patch for XDND and Wayland, on the window's existing connection.
 wgpu preparation runs off the UI thread and checks the originating press before
 starting; both hosts guard completion by artifact generation. Only an accepted
-external COPY dismisses. Own-app drops retain, and self-drops shake for 420 ms
-unless reduced motion is enabled. Native completion resets consumed pointer
+external COPY dismisses. Own-app drops retain, and a drop back on the stack
+lands the card in the slot under the pointer (see below; it shook for 420 ms
+until November 2026). Native completion resets consumed pointer
 state; X11 cancellation, disappearing targets and missing Finished have bounded
 cleanup. See `apps/native/wgpu/vendor/README.md` for provenance/update obligations.
 
 While a card's file is out, its slot plays the drag style chosen in
 Preferences (`mini_preview_drag_style`, shared `preview_drag_style`):
-Frosted imprint (default; the card's glass and chrome leave, the capture stays
-as a blurred half-strength imprint inside a hairline), Dock gap (the card lifts,
-leaves and its slot closes during the drag) or Quiet well (a recessed tile with
+Dock gap (default since November 2026; the card lifts, holds a 50 ms beat,
+then leaves while its slot eases shut on an ease-in-out curve), Frosted imprint
+(the card's glass and chrome leave, the capture stays as a blurred
+half-strength imprint inside a hairline) or Quiet well (a recessed tile with
 the shared `drag-out` glyph). This replaces the Tauri-era transparent shell
 with its buttons, at the maintainer's request (November 2026). An accepted
 external drop keeps the card until its fade and slot close have played; older
 cards glide toward the anchored edge by `closing_shift`, so the rebuilt stack
 lands on the same positions with no snap, for top and bottom corners. Cancel,
-retain and reject return the card; reject still shakes. A mostly vertical press
+retain and reject return the card. A drop back on the stack (reject) lands it
+in the slot under the pointer (`preview_drag_style::drop_index`), at the
+maintainer's request: a dock whose gap has closed moves the card there at once
+and reopens the gap there, otherwise the cards it passes glide aside
+(`Reorder::landing`) while it returns; the order commits through
+`PreviewStack::move_card` as a reorder does. A mostly vertical press
 on an expanded stack of two or more carries the card up or down
 (`preview_drag_style::Reorder`) and commits `PreviewStack::move_card`; a
 horizontal press, a lone card, or a carry that leaves the stack starts the

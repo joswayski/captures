@@ -334,16 +334,16 @@ the newest card. Dragging an expanded card's image past the system drag
 threshold drags its file into other apps through the shared `drag.rs` (the
 shared `PreparePreviewDrag` export, a copy with the 284 × 160 drag image);
 its slot shows Preferences' drag style, read when the drag begins, under the
-shared `preview_drag_style::DragOut` pose: Frosted imprint (the default: the
-capture at half opacity, blurred through one cached Direct2D Gaussian per
-drag, behind a 1 DIP hairline, the card at 0.97 with no chrome), Dock gap
-(the card lifts, fades and shrinks while its slot closes and older cards
-slide toward the anchored edge) or Quiet well (a recessed veil tile with the
+shared `preview_drag_style::DragOut` pose: Dock gap (the default: the card
+lifts, holds a beat, then fades and shrinks while its slot eases shut and
+older cards slide toward the anchored edge), Frosted imprint (the capture at
+half opacity, blurred through one cached Direct2D Gaussian per drag, behind
+a 1 DIP hairline, the card at 0.97 with no chrome) or Quiet well (a recessed veil tile with the
 "out" glyph). An accepted drop outside Captures fades the imprint, then its
 slot closes (older cards move up in a top stack, down in a bottom one) and
 only then does the card leave and the window shrink, with nothing jumping; a
-drop back on the stack shakes it (`thumbnail-drop-reject`, skipped under
-reduced motion) and, like any other end (a drop on another Captures window,
+drop back on the stack lands the card in the slot under the pointer, like
+a reorder (a closed dock gap reopens there), and, like any other end (a drop on another Captures window,
 a failed export, which shows on the card, or a drag let go before it began),
 brings the card back as its style reverses. A mostly vertical press on a
 card of a stack of two or more carries it instead (`preview_drag_style::Reorder`):

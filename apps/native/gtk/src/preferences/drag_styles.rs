@@ -260,9 +260,9 @@ mod tests {
     #[test]
     fn each_tile_selects_and_saves_its_style() {
         let settings = AppSettings::default();
-        // Frosted imprint is the default and the first tile.
-        assert_eq!(drag_style_id(&settings), "frosted");
-        assert_eq!(preferences::MINI_PREVIEW_DRAG_STYLES[0].0, "frosted");
+        // Dock gap is the default, the second tile.
+        assert_eq!(drag_style_id(&settings), "dock");
+        assert_eq!(preferences::MINI_PREVIEW_DRAG_STYLES[1].0, "dock");
         for (id, _) in preferences::MINI_PREVIEW_DRAG_STYLES {
             // A tile's click goes through `Prefs::set`'s path.
             let chosen = super::super::with_setting(

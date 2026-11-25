@@ -1741,7 +1741,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         y += copyBlock + tokens.number("s-4")
         let metrics = captures_preview_drag_style_metrics_v1()
         let styles = PreferencesPolicy.pairs("mini_preview_drag_styles")
-        let selected = settings.string("mini_preview_drag_style", "frosted")
+        let selected = settings.string("mini_preview_drag_style", "dock")
         let gap = tokens.number("s-3")
         let width = min(CGFloat(metrics.demo_width) + 8,
                         (contentWidth - gap * CGFloat(styles.count - 1)) / CGFloat(max(1, styles.count)))
@@ -1754,7 +1754,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         var tiles: [PreferenceDragStyleTile] = []
         for (index, style) in styles.enumerated() {
             let value = style.value
-            let code: UInt32 = value == "dock" ? 1 : value == "well" ? 2 : 0
+            let code: UInt32 = value == "frosted" ? 0 : value == "well" ? 2 : 1
             let frame = NSRect(x: CGFloat(index) * (width + gap), y: 0, width: width, height: height)
             searchable.append((findBackground(frame.offsetBy(dx: inset, dy: y), parent: card), style.label))
             let tile = PreferenceDragStyleTile(frame: frame, tokens: tokens, style: code, label: style.label) {

@@ -24,10 +24,11 @@
 //! Minimize grows into "Collapse" while hovered or focused.
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
-//! its slot keeps the Preferences drag style's imprint (Frosted imprint,
-//! Dock gap or Quiet well, `preview_drag_style::DragOut`). An accepted drop
+//! its slot keeps the Preferences drag style's imprint (Dock gap, Frosted
+//! imprint or Quiet well, `preview_drag_style::DragOut`). An accepted drop
 //! elsewhere fades the imprint and closes its slot before the card leaves,
-//! and a drop back on the stack shakes it (shipping `finishFileDrag`). A
+//! and a drop back on the stack moves the card to the slot under the
+//! pointer (`Stack::land_drag_out`). A
 //! mostly vertical press instead carries the card up or down the stack to
 //! reorder it (`preview_drag_style::Reorder`).
 //!
@@ -227,9 +228,6 @@ pub struct Stack {
     /// The carried pile's rear-card lean (`DragSway`), while it is carried
     /// and until it settles after.
     pub sway: Option<DragSway>,
-    /// When each card dropped back on the stack began its refusal shake
-    /// (`thumbnail-drop-reject`), by card id.
-    rejects: HashMap<String, f64>,
     /// The card corner tooltips (Close, Delete, Edit: 120 ms `ease`) and the
     /// toolbar's Clear all tooltip (`--dur-1` `--ease-out`).
     pub tips: [Tip<Hit>; 2],
@@ -378,30 +376,6 @@ const DUST_CHIP_PAD: f32 = 8.;
 const DUST_CHIP_GUTTER: f32 = 16.;
 /// `.thumbnail-dust { filter: blur(2px) }`.
 const DUST_CHIP_BLUR: f32 = 2.;
-
-/// `--thumbnail-drop-reject-duration` (`--dur-5`).
-const REJECT_MS: f64 = preview::PREVIEW_DROP_REJECT_MS as f64;
-
-/// `thumbnail-drop-reject`'s horizontal offset `elapsed_ms` in, linear
-/// (`--thumbnail-drop-reject-ease`) between its keyframes; `x` holds
-/// `--thumbnail-drop-reject-x-1` … `-x-4`.
-fn reject_offset([a, b, c, d]: [f32; 4], elapsed_ms: f64) -> f32 {
-    let t = (elapsed_ms / REJECT_MS).clamp(0., 1.) as f32;
-    let stops = [
-        (0., 0.),
-        (0.1, -a),
-        (0.3, a),
-        (0.5, -b),
-        (0.65, c),
-        (0.8, -d),
-        (0.9, d),
-        (1., 0.),
-    ];
-    stops.windows(2).find(|w| t <= w[1].0).map_or(0., |w| {
-        let ((t0, x0), (t1, x1)) = (w[0], w[1]);
-        x0 + (x1 - x0) * (t - t0) / (t1 - t0)
-    })
-}
 
 /// `THUMBNAIL_STACK_SCROLL_DURATION_MS`: a cue's one-slot ease-out scroll.
 const SCROLL_MS: f64 = 380.;
@@ -606,7 +580,6 @@ impl Stack {
             cues_shown: (None, None),
             gravity: if placement.is_top() { -1. } else { 1. },
             sway: None,
-            rejects: HashMap::new(),
             tips: [
                 Tip::timed(Transition::PreviewIconTooltip),
                 Tip::timed(Transition::PreviewStackTooltip),
@@ -660,6 +633,46 @@ impl Stack {
         if let Some(imprint) = self.imprints.iter_mut().find(|imprint| imprint.id == id) {
             imprint.drag.end(end, now);
         }
+    }
+
+    /// The card's file came back onto the stack at window y `y` (DIPs): it
+    /// returns into the slot under the pointer. A dock whose gap has closed
+    /// moves it there at once and reopens the gap there; otherwise the
+    /// cards it passes glide out of its way while it returns. False when
+    /// no drag of it was showing.
+    pub fn land_drag_out(&mut self, id: &str, y: f32, now: f64) -> bool {
+        let Some(imprint) = self
+            .imprints
+            .iter_mut()
+            .find(|imprint| imprint.id == id && imprint.drag.ended().is_none())
+        else {
+            return false;
+        };
+        let closed = imprint.drag.slot_closed(now);
+        imprint.drag.end(DragEnd::Returned, now);
+        let count = self.cards.len();
+        let Some(from) = self.cards.iter().position(|c| c.entry.id == id) else {
+            return true;
+        };
+        let to = drag_style::drop_index(count, f64::from(y - self.offset()), self.top);
+        let settled = !self.collapsed()
+            && self.exits.is_empty()
+            && self.carried.is_none()
+            && count == self.stack.ids().len();
+        if !settled || to == from {
+            return true;
+        }
+        if closed {
+            self.commit_move(id, from, to);
+        } else {
+            self.carried = Some(Carried {
+                id: id.to_owned(),
+                reorder: Reorder::landing(count, from, to, self.top, now, self.reduced),
+                offsets: vec![0.; count],
+                lift: 0.,
+            });
+        }
+        true
     }
 
     /// Commit the drags whose end has played: a returned card is at rest
@@ -791,7 +804,17 @@ impl Stack {
             return false;
         };
         let (from, to) = (carried.reorder.from(), carried.reorder.to());
-        if self.stack.move_card(&carried.id, to) && from < self.cards.len() {
+        self.commit_move(&carried.id, from, to);
+        // The pointer finds its card again; hover re-arms there.
+        self.hovered = None;
+        self.hot = None;
+        self.pressed = None;
+        true
+    }
+
+    /// Move display `from` to `to` in the membership and the cards for good.
+    fn commit_move(&mut self, id: &str, from: usize, to: usize) {
+        if self.stack.move_card(id, to) && from < self.cards.len() {
             let card = self.cards.remove(from);
             self.cards.insert(to.min(self.cards.len()), card);
             // The display order follows the new membership.
@@ -821,11 +844,6 @@ impl Stack {
                 other => other,
             });
         }
-        // The pointer finds its card again; hover re-arms there.
-        self.hovered = None;
-        self.hot = None;
-        self.pressed = None;
-        true
     }
 
     /// The display index of the carried card.
@@ -1176,22 +1194,6 @@ impl Stack {
         Ok(())
     }
 
-    /// A card's file was dropped back on this stack: refuse it with a
-    /// shake instead of dismissing it (shipping `playDropReject`). Reduced
-    /// motion skips the shake, as GTK does.
-    fn reject(&mut self, id: &str) {
-        if !self.reduced && self.card_motion.is_some() {
-            self.rejects.insert(id.to_owned(), now_ms());
-        }
-    }
-
-    /// Forget finished shakes; true while one still runs.
-    fn prune_rejects(&mut self) -> bool {
-        let now = now_ms();
-        self.rejects.retain(|_, start| now - *start < REJECT_MS);
-        !self.rejects.is_empty()
-    }
-
     /// Whether changes land at once.
     fn instant(&self) -> bool {
         self.reduced || self.motion.is_none()
@@ -1232,8 +1234,7 @@ impl Stack {
             .into_iter()
             .flatten()
             .any(|start| !self.reduced && now - start < CUE_IN_MS);
-        let easing = self.rejects.values().any(|start| now - start < REJECT_MS)
-            || self.sparkling()
+        let easing = self.sparkling()
             || (!self.instant() && self.hover_fades.values().any(|fade| fade.running(now)));
         let presence = !self.instant()
             && self.cards.iter().any(|card| {
@@ -2498,10 +2499,6 @@ impl Stack {
                 None => {}
             }
         }
-        if let Some(start) = self.rejects.get(id) {
-            let x = [1, 2, 3, 4].map(|n| t.n(&format!("thumbnail-drop-reject-x-{n}")));
-            dx += f64::from(reject_offset(x, now - start));
-        }
         // A file drag's imprint: the whole card fades and scales.
         let pose = self.drag_pose(index, now);
         if let Some(pose) = pose {
@@ -2665,11 +2662,7 @@ impl Stack {
         };
         // A leaving card keeps the dimmed hover look it had when it went; a
         // dissolving one also keeps its controls while they fade.
-        // A shaking card shows its image undimmed (`.thumbnail-drop-rejected img`).
         let [mut filter, mut zoom, mut controls, mut meta] = self.hover_look(index);
-        if self.rejects.contains_key(&card.entry.id) {
-            (filter, zoom) = (0., 0.);
-        }
         // A Close locks the hover look it was pressed in; Clear all keeps
         // each card's own (`--thumbnail-clear-image-filter`).
         let exit = self.exits.exiting(&card.entry.id);
@@ -4790,7 +4783,6 @@ impl Previews {
             Some(false) => self.rearm(),
             None => {}
         }
-        self.stack.prune_rejects();
         let _ = self.render();
         if self.moving() {
             return;
@@ -4902,7 +4894,7 @@ impl Previews {
     /// go before it began (`None`). A drop another app accepted fades the
     /// imprint and closes its slot, then the card leaves (`motion_tick`);
     /// any other end brings the card back, and a drop back on this stack
-    /// also shakes it (shipping `finishFileDrag`). Click-through re-arms
+    /// brings it back into the slot under the pointer. Click-through re-arms
     /// now; hover once the card is back at rest.
     fn end_drag(&mut self, result: Option<std::result::Result<crate::drag::Outcome, String>>) {
         let Some(id) = self.dragging.take() else {
@@ -4918,6 +4910,10 @@ impl Previews {
         self.stack.reduced = crate::appearance::reduced_motion();
         // A card already leaving keeps its exit.
         let live = self.stack.stack.ids().contains(&id);
+        let result_point = match &result {
+            Some(Ok(outcome)) => Some(outcome.point),
+            _ => None,
+        };
         let outcome = match result {
             Some(Ok(outcome)) if live => {
                 let landing = crate::drag::landing(outcome.point, Some(self.hwnd));
@@ -4925,10 +4921,19 @@ impl Previews {
             }
             _ => None,
         };
-        if outcome == Some(preview::PreviewDragOutcome::Reject) {
-            self.stack.reject(&id);
+        // A drop back on this stack moves the card to the slot under the
+        // pointer, as a reorder would.
+        let landed = outcome == Some(preview::PreviewDragOutcome::Reject)
+            && result_point.is_some_and(|mut p| {
+                unsafe {
+                    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut p);
+                }
+                let y = p.y as f32 / self.scale;
+                self.stack.land_drag_out(&id, y, now_ms())
+            });
+        if !landed {
+            self.stack.end_drag_out(&id, drag_end(outcome), now_ms());
         }
-        self.stack.end_drag_out(&id, drag_end(outcome), now_ms());
         self.rearm();
         let _ = self.render();
         self.animate();
@@ -5705,44 +5710,6 @@ mod tests {
         s.leave("a0", ExitKind::Dust, 0., true);
         assert!(s.stack.ids().is_empty());
         assert!(s.cards.iter().all(|c| c.entry.id != "a0"));
-    }
-
-    #[test]
-    fn a_drop_back_on_the_stack_shakes_the_card_in_place() {
-        use captures_settings::MiniPreviewPlacement as P;
-        // `thumbnail-drop-reject`'s keyframes, linear between them.
-        let x = [20., 16., 12., 8.];
-        for (ms, want) in [
-            (0., 0.),
-            (42., -20.),
-            (84., 0.),
-            (126., 20.),
-            (210., -16.),
-            (273., 12.),
-            (336., -8.),
-            (378., 8.),
-            (420., 0.),
-            (900., 0.),
-        ] {
-            let got = reject_offset(x, ms);
-            assert!((got - want).abs() < 1e-3, "{ms} ms: {got}");
-        }
-        let tokens = Tokens::variant("light", "mustard");
-        let amounts = [1, 2, 3, 4].map(|n| tokens.n(&format!("thumbnail-drop-reject-x-{n}")));
-        assert_eq!(amounts, [12., 8., 6., 4.]);
-        let mut s = stack(P::BottomLeft, &[true, false]);
-        s.card_motion = CardMotion::resolve(&tokens);
-        s.reject("a1");
-        // The card stays live and in its slot while it shakes.
-        assert_eq!(s.stack.ids(), ["a0", "a1"]);
-        assert!(s.animating());
-        assert!(s.prune_rejects());
-        // Reduced motion refuses the drop without the shake.
-        s.rejects.clear();
-        s.reduced = true;
-        s.reject("a0");
-        assert!(s.rejects.is_empty());
-        assert!(!s.animating());
     }
 
     #[test]

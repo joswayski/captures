@@ -6472,14 +6472,14 @@ mod tests {
         let _ = std::fs::remove_file(&file);
         let mut scene = Scene::new(tokens, file.clone(), String::new());
         scene.layout(&g, 900., 600.).unwrap();
-        // Frosted imprint is the default; the group is one Tab stop at it.
-        assert_eq!(scene.drag_style_index(), 0);
+        // Dock gap is the default; the group is one Tab stop at it.
+        assert_eq!(scene.drag_style_index(), 1);
         let stops: Vec<Target> = scene
             .focusable()
             .into_iter()
             .filter(|t| matches!(t, Target::DragStyle(_)))
             .collect();
-        assert_eq!(stops, [Target::DragStyle(0)]);
+        assert_eq!(stops, [Target::DragStyle(1)]);
         // Focus (with its ring) scrolls the row into view. The three tiles
         // sit in a row right below the Mini preview position.
         scene.set_focus(Some(Target::DragStyle(0)), true);

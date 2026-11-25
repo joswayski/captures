@@ -107,9 +107,9 @@ impl MiniPreviewPlacement {
 #[serde(rename_all = "snake_case")]
 pub enum MiniPreviewDragStyle {
     /// A soft, blurred echo of the capture behind a hairline.
-    #[default]
     Frosted,
     /// The card leaves and the stack closes up behind it.
+    #[default]
     Dock,
     /// An empty, recessed tile with one small glyph.
     Well,

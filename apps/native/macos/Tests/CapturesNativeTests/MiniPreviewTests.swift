@@ -785,51 +785,6 @@ final class MiniPreviewTests: XCTestCase {
             "an accepted external copy dismisses the exact source card")
     }
 
-    func testSelfDropRejectionMatchesShippingPresentationAndReducedMotion() throws {
-        _ = NSApplication.shared
-        let preference = NativeMotion.motionPreference
-        defer { NativeMotion.motionPreference = preference }
-        for reduced in [false, true] {
-            NativeMotion.motionPreference = { reduced }
-            let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
-            defer { controller.close() }
-            let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-                .first { $0.isVisible && $0.previewView === controller.previewView })
-            let card = try XCTUnwrap(panel.previewView.card(for: "source"))
-            let layer = try XCTUnwrap(card.layer)
-            CATransaction.flush()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
-            for operation in [NSDragOperation(), .copy] {
-                panel.previewView.samplePointer(nil) // A real drag has released the stale-pointer lock.
-                card.mouseExited(with: try hoverEvent(for: panel))
-                // Hold the real layer clock so slow CI rendering cannot skip a peak.
-                let started = layer.convertTime(CACurrentMediaTime(), from: nil)
-                layer.speed = 0; layer.timeOffset = started
-                card.finishDrag(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY), operation: operation)
-                XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
-                    "a self-drop is rejected even when the OS refuses COPY")
-                XCTAssertTrue(panel.previewView.visibleCardActionTitles.contains("Copy"),
-                    "the drop point restores hover without another mouse-enter event")
-                XCTAssertFalse(card.mediaHovered, "rejection keeps the restored action overlay's media sharp")
-                // Independently sampled from shipping CSS's uneven keyframe times.
-                for (seconds, offset) in [(0.042, -12.0), (0.126, 12.0), (0.210, -8.0),
-                                          (0.273, 6.0), (0.336, -4.0), (0.378, 4.0), (0.420, 0.0)] {
-                    layer.timeOffset = started + seconds
-                    let bitmap = try XCTUnwrap(renderPresentation(panel))
-                    XCTAssertEqual(try XCTUnwrap(layer.presentation()).transform.m41,
-                                   reduced ? 0 : CGFloat(offset), accuracy: 0.2,
-                                   "self-drop at \(seconds)s, reduced motion \(reduced), operation \(operation)")
-                    if seconds == 0.042 && operation.isEmpty {
-                        try write(bitmap, name: "mini-preview-self-drop-\(reduced ? "reduced" : "shake").png")
-                    }
-                }
-            }
-            card.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
-            XCTAssertFalse(panel.previewView.visibleCardActionTitles.contains("Copy"),
-                "a cancelled external landing must not leave source hover stuck on")
-        }
-    }
-
     func testFileDragShowsFrostedImprintAndRestoresRebuiltSurvivor() throws {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
@@ -1003,34 +958,42 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertTrue(controller.previewView === view, "a drag style change must not rebuild the panel")
     }
 
-    func testSelfDropSurvivesSettingsRebuildWithoutReplayingItsShake() throws {
+    func testDroppingAFileBackOnTheStackMovesTheCardToTheSlotUnderThePointer() throws {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
         NativeMotion.motionPreference = { false }
         defer { NativeMotion.motionPreference = preference }
-        let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
-        defer { controller.close() }
-        let original = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-            .first { $0.isVisible && $0.previewView === controller.previewView })
-        let card = try XCTUnwrap(original.previewView.card(for: "source"))
-        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
-        let started = CACurrentMediaTime()
-        card.finishDrag(at: NSPoint(x: original.frame.midX, y: original.frame.midY), operation: [])
-        RunLoop.current.run(until: Date().addingTimeInterval(0.06))
-        controller.updateSettings(previewSettings())
-        let rebuilt = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-            .first { $0.isVisible && $0.previewView === controller.previewView })
-        let survivor = try XCTUnwrap(rebuilt.previewView.card(for: "source"))
-        survivor.mouseEntered(with: try hoverEvent(for: rebuilt))
-        XCTAssertFalse(survivor.mediaHovered, "a surviving rejection keeps media sharp")
-        XCTAssertTrue(rebuilt.previewView.visibleCardActionTitles.contains("Copy"))
-        let layer = try XCTUnwrap(survivor.layer)
-        let peak = layer.convertTime(started, from: nil) + 0.126
-        layer.speed = 0; layer.timeOffset = peak
-        try write(XCTUnwrap(renderPresentation(rebuilt)), name: "mini-preview-self-drop-after-settings.png")
-        XCTAssertEqual(try XCTUnwrap(layer.presentation()).transform.m41, 12, accuracy: 0.6,
-            "the original 30% peak survives; replaying or losing the shake changes this pose")
-        try waitUntil { survivor.mediaHovered }
+        // Dock closes its gap (the card moves at once and the gap reopens
+        // there); Frosted keeps its slot (the cards glide past as it returns).
+        for placement in ["bottom_right", "top_right"] {
+            for style in ["dock", "frosted"] {
+                let controller = try twoCardController(placement: placement, style: style)
+                defer { controller.close() }
+                let view = try XCTUnwrap(controller.previewView)
+                let newer = try XCTUnwrap(view.card(for: "newer"))
+                let target = try screenFrame(try XCTUnwrap(view.card(for: "older")))
+                newer.setFileDragging(true)
+                newer.dragBegan?()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.9))
+                newer.finishDrag(at: NSPoint(x: target.midX, y: target.midY), operation: [])
+                try waitUntil { controller.presentedArtifactIDs == ["newer", "older"] }
+                try waitUntil {
+                    controller.previewView?.card(for: "newer")?.dragPose == nil
+                        && controller.previewView?.card(for: "newer")?.carrying == false
+                }
+                let moved = try screenFrame(try XCTUnwrap(controller.previewView?.card(for: "newer")))
+                XCTAssertEqual(moved.midY, target.midY, accuracy: 2,
+                               "\(style) \(placement): the card lands in the slot it was dropped on")
+                // Dropped back on its own slot, it simply returns.
+                let home = try XCTUnwrap(controller.previewView?.card(for: "newer"))
+                home.setFileDragging(true)
+                home.dragBegan?()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.9))
+                home.finishDrag(at: NSPoint(x: moved.midX, y: moved.midY), operation: [])
+                try waitUntil { controller.previewView?.card(for: "newer")?.dragPose == nil }
+                XCTAssertEqual(controller.presentedArtifactIDs, ["newer", "older"])
+            }
+        }
     }
 
     func testPendingFirstDecodeIsInvalidatedWhenHistoryIsCleared() throws {
@@ -2455,23 +2418,6 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(card.mediaBlurRadius, 2, accuracy: 0.01)
         try waitUntil { abs(card.mediaScale - 1.015) < 0.001 }
         try write(render(panel), name: "mini-preview-hover-blur.png")
-        let preference = NativeMotion.motionPreference
-        defer { NativeMotion.motionPreference = preference }
-        for reduced in [false, true] {
-            NativeMotion.motionPreference = { reduced }
-            card.rejectDrop()
-            XCTAssertFalse(card.mediaHovered, "rejection resets media without hiding hover actions")
-            XCTAssertEqual(card.mediaBlurRadius, 0, accuracy: 0.01)
-            XCTAssertEqual(card.mediaDimOpacity, 0, accuracy: 0.01)
-            XCTAssertEqual(card.mediaScale, 1, accuracy: 0.001)
-            card.mouseEntered(with: hover)
-            XCTAssertFalse(card.mediaHovered, "hover cannot reblur the media during rejection")
-            XCTAssertTrue(view.visibleCardActionTitles.contains("Copy"))
-            try write(render(panel), name: "mini-preview-self-drop-media-\(reduced ? "reduced" : "normal").png")
-            try waitUntil { card.mediaHovered && abs(card.mediaDimOpacity - 0.5) < 0.01 }
-            XCTAssertEqual(card.mediaBlurRadius, 2, accuracy: 0.01)
-            try waitUntil { abs(card.mediaScale - 1.015) < 0.001 }
-        }
         card.mouseExited(with: hover)
         try waitUntil { !card.mediaHovered && card.mediaDimOpacity < 0.01 }
         XCTAssertEqual(card.mediaBlurRadius, 0, accuracy: 0.01)
@@ -2742,8 +2688,12 @@ final class MiniPreviewTests: XCTestCase {
             clearAll: {}, move: move)
     }
 
+    /// Frosted imprint, which these drag tests were written against (Dock
+    /// gap is the default).
     private func previewSettings() -> MiniPreviewSettings {
-        MiniPreviewSettings(enabled: true, placement: "bottom_right", includeInCaptures: false)
+        var settings = MiniPreviewSettings(enabled: true, placement: "bottom_right", includeInCaptures: false)
+        settings.dragStyle = "frosted"
+        return settings
     }
 
     private func presentedController(_ captured: CaptureArtifact) throws -> MiniPreviewController {

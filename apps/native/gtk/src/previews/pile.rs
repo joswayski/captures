@@ -285,8 +285,6 @@ mod imp {
         pub dust: RefCell<HashMap<String, Vec<DustParticle>>>,
         /// Each card's top-left in the pile at the latest layout.
         pub origins: RefCell<HashMap<String, (f32, f32)>>,
-        /// Drop-on-self shake start, by card id.
-        pub rejects: RefCell<HashMap<String, f64>>,
         pub exit_motion: Cell<Option<super::ExitMotion>>,
         /// An exit ended and its card left the pile.
         pub on_exited: RefCell<Option<Box<dyn Fn()>>>,
@@ -439,45 +437,12 @@ pub struct Carry {
     released: Option<((f64, f64), f64)>,
 }
 
-/// Exit and reject timings, resolved once from the tokens.
+/// Exit timings, resolved once from the tokens.
 #[derive(Clone, Copy)]
 pub struct ExitMotion {
     dismiss: Animation,
     streak: Animation,
     fallback: Animation,
-    /// `--thumbnail-drop-reject-duration` and `-x-1` … `-x-4`.
-    reject_ms: f64,
-    reject_x: [f64; 4],
-}
-
-impl ExitMotion {
-    /// `thumbnail-drop-reject`'s horizontal shake, linear between stops.
-    fn reject_offset(&self, elapsed_ms: f64) -> f64 {
-        if elapsed_ms >= self.reject_ms {
-            return 0.;
-        }
-        let [a, b, c, d] = self.reject_x;
-        let stops = [
-            (0., 0.),
-            (0.1, -a),
-            (0.3, a),
-            (0.5, -b),
-            (0.65, c),
-            (0.8, -d),
-            (0.9, d),
-            (1., 0.),
-        ];
-        let t = (elapsed_ms / self.reject_ms).clamp(0., 1.);
-        let pair = stops
-            .windows(2)
-            .find(|pair| t <= pair[1].0)
-            .unwrap_or(&stops[6..]);
-        lerp(
-            pair[0].1,
-            pair[1].1,
-            (t - pair[0].0) / (pair[1].0 - pair[0].0),
-        )
-    }
 }
 
 glib::wrapper! {
@@ -557,9 +522,6 @@ impl Pile {
             dismiss: animation(Motion::PreviewDismiss),
             streak: animation(Motion::PreviewDismissStreak),
             fallback: animation(Motion::PreviewDeleteFallback),
-            reject_ms: f64::from(tokens.number("thumbnail-drop-reject-duration")),
-            reject_x: [1, 2, 3, 4]
-                .map(|n| f64::from(tokens.number(&format!("thumbnail-drop-reject-x-{n}")))),
         }));
         controls.set_parent(&pile);
         *imp.controls.borrow_mut() = Some(controls.clone().upcast());
@@ -904,18 +866,6 @@ impl Pile {
         true
     }
 
-    /// Shipping's "no" shake when a card's file is dropped back on the stack.
-    pub fn reject(&self, id: &str) {
-        let imp = self.imp();
-        if self.reduced() || imp.collapsed.get() || imp.exits.borrow().exiting(id).is_some() {
-            return;
-        }
-        imp.rejects
-            .borrow_mut()
-            .insert(id.to_owned(), self.now_ms());
-        self.animate();
-    }
-
     /// The clock drags and reorders run on; `--drag` fixtures hold it.
     fn drag_now(&self) -> f64 {
         self.imp().drag_clock.get().unwrap_or_else(|| self.now_ms())
@@ -1001,6 +951,55 @@ impl Pile {
             root.add_css_class("drag-returning");
         }
         self.update_cards();
+        self.animate();
+        true
+    }
+
+    /// `id`'s file was dropped back on the stack at pile `y`: the card
+    /// returns into the slot under the pointer, as if carried there. A
+    /// dock whose gap has closed moves it at once and reopens the gap
+    /// there; otherwise the cards it passes glide out of its way while it
+    /// returns. False when no drag of it was showing.
+    pub fn drag_out_land(&self, id: &str, y: f64) -> bool {
+        let imp = self.imp();
+        let now = self.drag_now();
+        let Some(closed) = imp
+            .drags
+            .borrow()
+            .iter()
+            .find(|drag| drag.id == id && drag.model.ended().is_none())
+            .map(|drag| drag.model.slot_closed(now))
+        else {
+            return false;
+        };
+        let count = imp.cards.borrow().len();
+        let from = imp.cards.borrow().iter().position(|card| card.id == id);
+        let home_top = imp.origins.borrow().get(id).map(|&(_, top)| f64::from(top));
+        let top = imp.top_anchor.get();
+        let to = from.zip(home_top).and_then(|(from, home_top)| {
+            let content = home_top - Reorder::slot_top(count, from, top);
+            let to = drag_style::drop_index(count, y - content, top);
+            let settled = !imp.collapsed.get()
+                && imp.exits.borrow().is_empty()
+                && imp.carried.borrow().is_none();
+            (settled && to != from).then_some((from, to, home_top))
+        });
+        self.drag_out_end(id, DragEnd::Returned);
+        let Some((from, to, home_top)) = to else {
+            return true;
+        };
+        if closed {
+            self.commit_move(id, from, to);
+        } else {
+            *imp.carried.borrow_mut() = Some(Carried {
+                id: id.to_owned(),
+                model: Reorder::landing(count, from, to, top, now, self.reduced()),
+                offsets: vec![0.; count],
+                lift: 0.,
+                moving: true,
+                home_top,
+            });
+        }
         self.animate();
         true
     }
@@ -1197,6 +1196,13 @@ impl Pile {
             return;
         };
         imp.carried.take();
+        self.commit_move(&id, from, to);
+    }
+
+    /// Move `id` from chronological `from` to `to` for good and tell
+    /// [`Self::connect_reordered`].
+    fn commit_move(&self, id: &str, from: usize, to: usize) {
+        let imp = self.imp();
         if from != to {
             move_item(&mut imp.cards.borrow_mut(), from, to);
             // Paint order follows the chronology again.
@@ -1208,7 +1214,7 @@ impl Pile {
         self.update_cards();
         self.queue_resize();
         if let Some(reordered) = imp.on_reordered.borrow().as_ref() {
-            reordered(&id, to);
+            reordered(id, to);
         }
     }
 
@@ -1299,7 +1305,6 @@ impl Pile {
             keep
         });
         imp.arrivals.borrow_mut().remove(id);
-        imp.rejects.borrow_mut().remove(id);
         imp.dust.borrow_mut().remove(id);
         imp.drags.borrow_mut().retain(|drag| drag.id != id);
         self.abandon_reorder();
@@ -1682,16 +1687,11 @@ impl Pile {
         imp.arrivals
             .borrow_mut()
             .retain(|_, start| arrive.running(now - *start, reduced));
-        let reject_ms = self.exit_motion().reject_ms;
-        imp.rejects
-            .borrow_mut()
-            .retain(|_, start| !reduced && now - *start < reject_ms);
         let deepest = imp.cards.borrow().len().saturating_sub(1);
         toolbar
             || fly.running(now - since, reduced)
             || imp.fan.borrow().running(deepest, now, &fan, reduced)
             || !imp.arrivals.borrow().is_empty()
-            || !imp.rejects.borrow().is_empty()
             || !imp.exits.borrow().is_empty()
             || self.carry_moving(now, deepest, &fan, reduced)
             || self.drags_moving(self.drag_now())
@@ -1820,7 +1820,6 @@ impl Pile {
         let motion = self.exit_motion();
         let settle = preview_motion::settle_tween();
         let exits = imp.exits.borrow();
-        let rejects = imp.rejects.borrow();
         let mut origins = imp.origins.borrow_mut();
         let mirror = if imp.right_anchor.get() { -1. } else { 1. };
         let fan = imp.fan.borrow();
@@ -1917,9 +1916,7 @@ impl Pile {
             // Survivors slide into an exiting card's slot; the exiting card
             // streaks out, shrinks away or hands its look to the dust.
             let shift = exits.shift_px(&card.id, now, reduced, &settle, top);
-            let mut slide = rejects
-                .get(&card.id)
-                .map_or(0., |start| motion.reject_offset(now - start));
+            let mut slide = 0.;
             match exits.exiting(&card.id) {
                 Some(exit) if exit.kind == ExitKind::Dust => {
                     let frame = preview_motion::dust_frame(exit.elapsed_ms(now).max(0.), reduced);
@@ -2053,16 +2050,16 @@ mod tests {
         drags[1].model.end(DragEnd::Returned, 5_000.);
         let dropped = DragOut::end_ms(DragStyle::Frosted, DragEnd::Dropped);
         let returned = DragOut::end_ms(DragStyle::Dock, DragEnd::Returned);
-        assert!(dropped < returned);
-        assert!(take_finished(&mut drags, 5_000. + dropped - 1.).is_empty());
+        assert!(returned < dropped);
+        assert!(take_finished(&mut drags, 5_000. + returned - 1.).is_empty());
         assert_eq!(drags.len(), 2);
-        assert_eq!(
-            take_finished(&mut drags, 5_000. + dropped),
-            vec![("a".to_owned(), DragEnd::Dropped)]
-        );
         assert_eq!(
             take_finished(&mut drags, 5_000. + returned),
             vec![("b".to_owned(), DragEnd::Returned)]
+        );
+        assert_eq!(
+            take_finished(&mut drags, 5_000. + dropped),
+            vec![("a".to_owned(), DragEnd::Dropped)]
         );
         assert!(drags.is_empty());
     }

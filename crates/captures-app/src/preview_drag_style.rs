@@ -45,14 +45,29 @@ pub const FROST_BLUR: f64 = 14.;
 const FROST_MEDIA_OPACITY: f64 = 0.5;
 const FROST_MEDIA_SCALE: f64 = 1.08;
 const FROST_CARD_SCALE: f64 = 0.97;
-/// Dock: a short lift, then the card leaves and its slot closes.
-const DOCK_LIFT_MS: f64 = 110.;
-const DOCK_LIFT_SCALE: f64 = 1.035;
-const DOCK_LEAVE_MS: f64 = 200.;
+/// Dock: a short lift, a brief beat, then the card leaves and its slot
+/// eases shut, all on the symmetric [`DOCK_EASE`].
+const DOCK_LIFT_MS: f64 = 150.;
+const DOCK_LIFT_SCALE: f64 = 1.03;
+const DOCK_BEAT_MS: f64 = 50.;
+const DOCK_LEAVE_MS: f64 = 260.;
 const DOCK_AWAY_SCALE: f64 = 0.94;
+/// The slot starts closing a moment after the card starts leaving.
+const DOCK_CLOSE_DELAY_MS: f64 = 60.;
+const DOCK_CLOSE_MS: f64 = 460.;
+/// Returning, the slot eases open over this long.
+const DOCK_OPEN_MS: f64 = 400.;
+/// CSS `ease-in-out`: the dock's gap opens and closes without a lurch.
+const DOCK_EASE: CubicBezier = CubicBezier {
+    x1: 0.42,
+    y1: 0.0,
+    x2: 0.58,
+    y2: 1.0,
+};
 /// Well: the card empties into a recessed tile.
 const WELL_IN_MS: f64 = 220.;
-/// Returning reverses the style; the dock reopens its slot first.
+/// Returning reverses the style; the dock reopens its slot first, and its
+/// card re-forms once the slot is [`DOCK_REFORM_AT`] open.
 const RETURN_MS: f64 = 300.;
 const DOCK_REFORM_AT: f64 = 0.45;
 /// An accepted drop: the imprint shrinks away, then its slot closes.
@@ -218,12 +233,23 @@ impl DragOut {
         self.end.map(|(end, ..)| end)
     }
 
+    /// Whether the card's slot is mostly closed at `now_ms`, as the dock
+    /// leaves it. A file dropped back on the stack then moves its card to
+    /// the new spot at once ([`drop_index`]) and the slot reopens there;
+    /// otherwise the stack glides around it ([`Reorder::landing`]) while
+    /// it returns.
+    pub fn slot_closed(&self, now_ms: f64) -> bool {
+        self.pose(now_ms).slot < 0.5
+    }
+
     /// Milliseconds an end takes to play out in this style.
     pub fn end_ms(style: DragStyle, end: DragEnd) -> f64 {
         match (style, end) {
-            (DragStyle::Dock, DragEnd::Returned) => RETURN_MS / DOCK_REFORM_AT.max(0.5) + 40.,
+            (DragStyle::Dock, DragEnd::Returned) => {
+                (DOCK_OPEN_MS * DOCK_REFORM_AT + RETURN_MS).max(DOCK_OPEN_MS)
+            }
             (_, DragEnd::Returned) => RETURN_MS,
-            (DragStyle::Dock, DragEnd::Dropped) => SLOT_CLOSE_MS,
+            (DragStyle::Dock, DragEnd::Dropped) => DOCK_CLOSE_MS,
             (_, DragEnd::Dropped) => SLOT_CLOSE_DELAY_MS + SLOT_CLOSE_MS,
         }
     }
@@ -239,7 +265,11 @@ impl DragOut {
                     DragStyle::Frosted => FROST_IN_MS,
                     // The glyph settles 80 ms after the well.
                     DragStyle::Well => WELL_IN_MS + 80.,
-                    DragStyle::Dock => DOCK_LIFT_MS + SLOT_CLOSE_MS.max(DOCK_LEAVE_MS),
+                    DragStyle::Dock => {
+                        DOCK_LIFT_MS
+                            + DOCK_BEAT_MS
+                            + DOCK_LEAVE_MS.max(DOCK_CLOSE_DELAY_MS + DOCK_CLOSE_MS)
+                    }
                 };
                 !self.reduced && now_ms - self.began_ms < away_ms
             }
@@ -280,9 +310,10 @@ impl DragOut {
                 if self.reduced {
                     return away;
                 }
-                let lift = self.progress(t, DOCK_LIFT_MS, SETTLE);
-                let leave = self.progress(t - DOCK_LIFT_MS, DOCK_LEAVE_MS, SETTLE);
-                let close = self.progress(t - DOCK_LIFT_MS, SLOT_CLOSE_MS, SLOT);
+                let lift = self.progress(t, DOCK_LIFT_MS, DOCK_EASE);
+                let leaving = t - DOCK_LIFT_MS - DOCK_BEAT_MS;
+                let leave = self.progress(leaving, DOCK_LEAVE_MS, DOCK_EASE);
+                let close = self.progress(leaving - DOCK_CLOSE_DELAY_MS, DOCK_CLOSE_MS, DOCK_EASE);
                 CardPose {
                     opacity: 1. - leave,
                     scale: 1. + (DOCK_LIFT_SCALE - 1.) * lift * (1. - leave)
@@ -303,8 +334,8 @@ impl DragOut {
         match end {
             DragEnd::Returned if self.style == DragStyle::Dock && !self.reduced => {
                 // The slot opens first; the card re-forms as it does.
-                let open = self.progress(t, RETURN_MS, SLOT);
-                let reform = self.progress(t - RETURN_MS * DOCK_REFORM_AT, RETURN_MS, SETTLE);
+                let open = self.progress(t, DOCK_OPEN_MS, DOCK_EASE);
+                let reform = self.progress(t - DOCK_OPEN_MS * DOCK_REFORM_AT, RETURN_MS, DOCK_EASE);
                 let mut pose = CardPose::lerp(from, CardPose::REST, reform);
                 pose.slot = from.slot + (1. - from.slot) * open;
                 pose
@@ -315,7 +346,7 @@ impl DragOut {
             DragEnd::Dropped => {
                 let gone = self.progress(t, HANDOFF_MS, SETTLE);
                 let close = if self.style == DragStyle::Dock {
-                    self.progress(t, SLOT_CLOSE_MS, SLOT)
+                    self.progress(t, DOCK_CLOSE_MS, DOCK_EASE)
                 } else {
                     self.progress(t - SLOT_CLOSE_DELAY_MS, SLOT_CLOSE_MS, SLOT)
                 };
@@ -367,6 +398,13 @@ pub fn reorder_index(count: usize, card_top: f64, top_anchor: bool) -> usize {
         .round()
         .clamp(0., (count - 1) as f64) as usize;
     if top_anchor { count - 1 - slot } else { slot }
+}
+
+/// The chronological index a card whose file is dropped back on its own
+/// stack lands at: the slot nearest the pointer, `pointer_y` in stack
+/// content (the coordinates of [`Reorder::slot_top`]).
+pub fn drop_index(count: usize, pointer_y: f64, top_anchor: bool) -> usize {
+    reorder_index(count, pointer_y - THUMBNAIL_CARD_HEIGHT / 2., top_anchor)
 }
 
 /// Lift: the carried card grows slightly as it leaves its slot.
@@ -441,6 +479,24 @@ impl Reorder {
             dropped: None,
             reduced,
         }
+    }
+
+    /// A card whose file came back onto the stack, already let go at `to`:
+    /// it and the cards it passes glide to their new slots, without the
+    /// carry's lift.
+    pub fn landing(
+        count: usize,
+        from: usize,
+        to: usize,
+        top_anchor: bool,
+        now_ms: f64,
+        reduced: bool,
+    ) -> Self {
+        let mut reorder = Self::new(count, from, top_anchor, now_ms, reduced);
+        reorder.to = to.min(count.saturating_sub(1));
+        // Let go a lift's length ago, so it has nothing to settle from.
+        reorder.dropped = Some(now_ms - REORDER_LIFT_MS);
+        reorder
     }
 
     /// The top of chronological `index`'s resting slot in stack content.
@@ -687,14 +743,30 @@ mod tests {
     #[test]
     fn the_dock_closes_its_gap_while_away_and_reopens_it_on_return() {
         let mut drag = DragOut::new(DragStyle::Dock, 0., false);
-        // The card lifts before it leaves.
+        // The card lifts, holds a beat, and only then leaves.
         assert!(drag.pose(DOCK_LIFT_MS).scale > 1.02);
-        assert_eq!(drag.pose(DOCK_LIFT_MS).slot, 1.);
+        let beat = drag.pose(DOCK_LIFT_MS + DOCK_BEAT_MS);
+        assert_eq!((beat.opacity, beat.slot), (1., 1.));
+        assert!(!drag.slot_closed(DOCK_LIFT_MS + DOCK_BEAT_MS));
+        // The gap eases shut: slow at both ends, never a step over 24 pt
+        // at 60 Hz.
+        let mut last = 1.;
+        let mut steps = vec![];
+        for frame in 0..60 {
+            let slot = drag.pose(frame as f64 * 16.).slot;
+            assert!(slot <= last && (last - slot) * SLOT_PITCH < 24.);
+            steps.push(last - slot);
+            last = slot;
+        }
+        let moving: Vec<f64> = steps.into_iter().filter(|step| *step > 0.).collect();
+        let peak = moving.iter().cloned().fold(0., f64::max);
+        assert!(moving[0] < peak / 4. && moving[moving.len() - 1] < peak / 4.);
         let away = drag.pose(1_000.);
         assert_eq!((away.opacity, away.slot), (0., 0.));
+        assert!(drag.slot_closed(1_000.));
         drag.end(DragEnd::Returned, 1_000.);
         // The slot opens before the card shows again.
-        let opening = drag.pose(1_000. + RETURN_MS * 0.4);
+        let opening = drag.pose(1_000. + DOCK_OPEN_MS * 0.4);
         assert!(opening.slot > 0.3 && opening.opacity < 0.01);
         let done = 1_000. + DragOut::end_ms(DragStyle::Dock, DragEnd::Returned);
         assert!(drag.finished(done));
@@ -827,6 +899,46 @@ mod tests {
             reorder.frame(now);
         }
         assert_eq!(reorder.frame(now).0, vec![0.; 3]);
+    }
+
+    #[test]
+    fn a_file_dropped_back_on_the_stack_lands_in_the_slot_under_the_pointer() {
+        // The pointer anywhere over a slot picks that slot, in either
+        // orientation; past the ends clamps.
+        for top in [false, true] {
+            for index in 0..4 {
+                let middle = Reorder::slot_top(4, index, top) + THUMBNAIL_CARD_HEIGHT / 2.;
+                for dy in [
+                    -THUMBNAIL_CARD_HEIGHT / 2. + 1.,
+                    0.,
+                    THUMBNAIL_CARD_HEIGHT / 2. - 1.,
+                ] {
+                    assert_eq!(drop_index(4, middle + dy, top), index, "{top} {index}");
+                }
+            }
+        }
+        assert_eq!(drop_index(4, -500., false), 0);
+        assert_eq!(drop_index(4, -500., true), 3);
+        // Only a dock whose gap has closed moves the card before it returns.
+        assert!(!DragOut::new(DragStyle::Frosted, 0., false).slot_closed(1_000.));
+        assert!(!DragOut::new(DragStyle::Well, 0., false).slot_closed(1_000.));
+        // A landing glides without a lift and commits where it was dropped.
+        let mut landing = Reorder::landing(4, 3, 1, false, 100., false);
+        let (offsets, lift) = landing.frame(116.);
+        assert_eq!(lift, 0.);
+        assert!(offsets[3] < 0. && offsets[3] > -2. * SLOT_PITCH);
+        assert!(offsets[1] > 0. && offsets[1] < SLOT_PITCH);
+        let mut now = 116.;
+        while !landing.settled(now) {
+            now += 16.;
+            assert_eq!(landing.frame(now).1, 0.);
+            assert!(now < 1_000.);
+        }
+        assert_eq!((landing.from(), landing.to()), (3, 1));
+        assert_eq!(
+            landing.frame(now).0,
+            vec![0., SLOT_PITCH, SLOT_PITCH, -2. * SLOT_PITCH]
+        );
     }
 
     #[test]

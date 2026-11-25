@@ -1262,13 +1262,13 @@ impl From<CardPose> for CapturesPreviewDragPose {
     }
 }
 
-/// `mini_preview_drag_style` as a number: 0 frosted (and anything unknown),
+/// `mini_preview_drag_style` as a number: 0 frosted, 1 dock (and anything unknown),
 /// 1 dock, 2 well.
 fn drag_style(style: u32) -> DragStyle {
     match style {
-        1 => DragStyle::Dock,
+        0 => DragStyle::Frosted,
         2 => DragStyle::Well,
-        _ => DragStyle::Frosted,
+        _ => DragStyle::Dock,
     }
 }
 
@@ -1378,6 +1378,27 @@ pub extern "C" fn captures_preview_reorder_new_v1(
     Box::into_raw(Box::new(CapturesPreviewReorder(Reorder::new(
         count,
         from,
+        top_anchor,
+        now_ms,
+        reduced_motion,
+    ))))
+}
+
+/// A card whose file was dropped back on its stack, already let go at `to`
+/// (see `Reorder::landing`); free it like a reorder.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_reorder_landing_v1(
+    count: usize,
+    from: usize,
+    to: usize,
+    top_anchor: bool,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> *mut CapturesPreviewReorder {
+    Box::into_raw(Box::new(CapturesPreviewReorder(Reorder::landing(
+        count,
+        from,
+        to,
         top_anchor,
         now_ms,
         reduced_motion,
@@ -2246,11 +2267,26 @@ mod tests {
             assert!(captures_preview_drag_out_pose_v1(drag, 5_000., &mut pose));
             assert_eq!(pose, CardPose::REST.into());
             captures_preview_drag_out_free_v1(drag);
-            // Unknown styles are frosted, the default.
-            let frosted = captures_preview_drag_out_new_v1(99, 0., true);
-            captures_preview_drag_out_pose_v1(frosted, 0., &mut pose);
-            assert!(pose.media_blur > 0. && pose.slot == 1.);
-            captures_preview_drag_out_free_v1(frosted);
+            // Unknown styles are the dock, the default.
+            let unknown = captures_preview_drag_out_new_v1(99, 0., true);
+            captures_preview_drag_out_pose_v1(unknown, 0., &mut pose);
+            assert!(pose.media_blur == 0. && pose.slot == 0.);
+            captures_preview_drag_out_free_v1(unknown);
+            // A file dropped back on the stack lands at 2 without a lift.
+            let landing = captures_preview_reorder_landing_v1(3, 0, 2, false, 0., true);
+            let (mut offsets, mut lift, mut from, mut to) = ([9.; 3], 9., 9, 9);
+            assert!(captures_preview_reorder_frame_v1(
+                landing,
+                0.,
+                offsets.as_mut_ptr(),
+                3,
+                &mut lift,
+                &mut from,
+                &mut to,
+            ));
+            assert_eq!((lift, from, to), (0., 0, 2));
+            assert_eq!(offsets[1], -preview_drag_style::SLOT_PITCH);
+            captures_preview_reorder_free_v1(landing);
             assert!(captures_preview_drag_out_pose_v1(null_mut(), 0., &mut pose));
 
             let reorder = captures_preview_reorder_new_v1(3, 0, false, 0., true);

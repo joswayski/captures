@@ -91,8 +91,8 @@ struct State {
     pile: Pile,
     minimize: gtk::Button,
     actions: Actions,
-    /// The current file drag landed on this stack (shipping rejects it).
-    self_drop: Cell<bool>,
+    /// The current file drag landed on this stack, at this pile y.
+    self_drop: Cell<Option<f64>>,
     placement: Cell<captures_settings::MiniPreviewPlacement>,
     /// A carried pile's origin and the corner it now expands from, until
     /// the stack empties (shipping's session-only dragged origin).
@@ -179,7 +179,7 @@ pub fn build(
         pile: pile.clone(),
         minimize: minimize.clone(),
         actions,
-        self_drop: Cell::new(false),
+        self_drop: Cell::new(None),
         placement: Cell::new(placement),
         dragged: Cell::new(None),
         #[cfg(feature = "x11")]
@@ -234,13 +234,13 @@ pub fn build(
             state.relayout();
         }
     });
-    // A card's file dropped back on the stack is refused with a shake.
+    // A card's file dropped back on the stack moves it to the slot there.
     let drop = gtk::DropTargetAsync::new(None, gdk::DragAction::COPY);
     drop.connect_accept(|_, drop| drop.drag().is_some());
     let weak = Rc::downgrade(&state);
-    drop.connect_drop(move |_, drop, _, _| {
+    drop.connect_drop(move |_, drop, _, y| {
         if let Some(state) = weak.upgrade() {
-            state.self_drop.set(true);
+            state.self_drop.set(Some(y));
         }
         drop.finish(gdk::DragAction::empty());
         true
@@ -647,7 +647,7 @@ impl State {
     /// next drag.
     fn file_drag_began(&self, card: &Rc<Card>) {
         crate::live::file_drag(true);
-        self.self_drop.set(false);
+        self.self_drop.set(None);
         let style = captures_settings::load(&self.settings_file)
             .unwrap_or_default()
             .mini_preview_drag_style;
@@ -661,10 +661,11 @@ impl State {
 
     /// An accepted copy elsewhere lets the card go once its slot has
     /// closed; anything else brings it back, and a drop on the stack itself
-    /// also shakes it.
+    /// brings it back into the slot under the pointer.
     fn file_drag_ended(&self, card: &Rc<Card>, accepted: bool) {
         crate::live::file_drag(false);
-        let landing = if self.self_drop.replace(false) {
+        let self_drop = self.self_drop.take();
+        let landing = if self_drop.is_some() {
             PreviewDropLanding::PreviewStack
         } else {
             PreviewDropLanding::External
@@ -676,17 +677,18 @@ impl State {
         } else {
             DragEnd::Returned
         };
+        let shown = match self_drop {
+            Some(y) => self.pile.drag_out_land(id, y),
+            None => self.pile.drag_out_end(id, end),
+        };
         // A collapsed pile shows no drag: the outcome applies at once.
-        if !self.pile.drag_out_end(id, end) {
+        if !shown {
             if end == DragEnd::Dropped {
                 self.leave(id, None);
                 return;
             }
             card.held.set(false);
             card.refresh();
-        }
-        if outcome == preview::PreviewDragOutcome::Reject {
-            self.pile.reject(id);
         }
     }
 

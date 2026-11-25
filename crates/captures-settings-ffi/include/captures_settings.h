@@ -413,7 +413,7 @@ typedef struct {
 bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, double dy,
     double dt_ms, bool reduced_motion);
 /* Dragging a mini preview (captures_app::preview_drag_style). Styles: 0
- * frosted (default, and anything unknown), 1 dock, 2 well. A drag-out
+ * frosted, 1 dock (default, and anything unknown), 2 well. A drag-out
  * handle's pose_v1 writes the dragged card's pose at now_ms and returns
  * whether its end has finished playing (back at rest, or gone with its slot
  * closed); end_v1 counts once. Older cards move closing_shift_v1(pose.slot)
@@ -421,7 +421,8 @@ bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, doubl
  * drag. A reorder handle's frame_v1 writes each card's visual y offset
  * (chronological, up to capacity), the carried card's lift and from/to, and
  * returns whether it settled after release; then commit from -> to with
- * captures_preview_stack_move_v1. Calls on one handle must never overlap;
+ * captures_preview_stack_move_v1. reorder_landing_v1 is a reorder already
+ * let go at `to` (a file dropped back on the stack). Calls on one handle must never overlap;
  * free each handle exactly once. */
 typedef struct {
     double opacity, scale, media_blur, media_opacity, media_scale, fill_opacity,
@@ -440,6 +441,8 @@ bool captures_preview_reorder_escapes_v1(double dx_outside, double beyond);
 typedef struct CapturesPreviewReorder CapturesPreviewReorder;
 CapturesPreviewReorder *captures_preview_reorder_new_v1(size_t count, size_t from, bool top_anchor,
     double now_ms, bool reduced_motion);
+CapturesPreviewReorder *captures_preview_reorder_landing_v1(size_t count, size_t from, size_t to,
+    bool top_anchor, double now_ms, bool reduced_motion);
 void captures_preview_reorder_free_v1(CapturesPreviewReorder *handle);
 void captures_preview_reorder_pointer_v1(CapturesPreviewReorder *handle, double dy);
 void captures_preview_reorder_release_v1(CapturesPreviewReorder *handle, bool cancel, double now_ms);

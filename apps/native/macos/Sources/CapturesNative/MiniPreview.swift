@@ -11,14 +11,15 @@ struct MiniPreviewSettings: Equatable {
     let includeInCaptures: Bool
     /// `mini_preview_drag_style`: what a card's slot shows while its file is
     /// dragged out (`frosted`, `dock` or `well`).
-    var dragStyle = "frosted"
+    var dragStyle = "dock"
 
-    /// The style's ABI number (`captures_preview_drag_out_new_v1`).
+    /// The style's ABI number (`captures_preview_drag_out_new_v1`); anything
+    /// unknown is the default, Dock gap.
     var dragStyleCode: UInt32 {
         switch dragStyle {
-        case "dock": 1
+        case "frosted": 0
         case "well": 2
-        default: 0
+        default: 1
         }
     }
 
@@ -786,7 +787,6 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var editControl: MiniPreviewButton? { editButton }
     private var press: NSPoint?
     private(set) var fileDragStarted = false
-    private(set) var dropRejectedAt: CFTimeInterval?
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
     /// A file drag of this card began (`MiniPreviewController.beginDragOut`).
@@ -1237,7 +1237,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// `html:not(.thumbnail-native-tracking) .thumbnail-card:hover img`: blur,
     /// darken and scale the media over its shipping transitions.
     private func setMediaHovered(_ requested: Bool, animated: Bool = true) {
-        let hovered = requested && (dropRejectedAt == nil || isExiting)
+        let hovered = requested
         guard hovered != mediaHovered else { return }
         mediaHovered = hovered
         // Chrome backdrops show the media as presented.
@@ -1706,33 +1706,6 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         }
         dragEnded?(screenPoint, operation)
         refreshChrome()
-    }
-
-    func rejectDrop(startedAt: CFTimeInterval? = nil) {
-        let began = startedAt ?? CACurrentMediaTime()
-        let duration = Double(tokens.number("thumbnail-drop-reject-duration")) / 1000
-        let elapsed = CACurrentMediaTime() - began
-        guard !isExiting, elapsed < duration else { return }
-        dropRejectedAt = began
-        imageView.layer?.removeAllAnimations()
-        mediaDim.layer?.removeAllAnimations()
-        setMediaHovered(false, animated: false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration - elapsed) { [weak self] in
-            guard let self, self.dropRejectedAt == began else { return }
-            self.dropRejectedAt = nil
-            guard !self.isExiting else { return }
-            self.refreshChrome()
-        }
-        guard !NativeMotion.reduceMotion, let layer else { return }
-        let shake = CAKeyframeAnimation(keyPath: "transform.translation.x")
-        shake.values = [0, -tokens.number("thumbnail-drop-reject-x-1"), tokens.number("thumbnail-drop-reject-x-1"),
-                        -tokens.number("thumbnail-drop-reject-x-2"), tokens.number("thumbnail-drop-reject-x-3"),
-                        -tokens.number("thumbnail-drop-reject-x-4"), tokens.number("thumbnail-drop-reject-x-4"), 0]
-        shake.keyTimes = [0, 0.1, 0.3, 0.5, 0.65, 0.8, 0.9, 1]
-        shake.duration = duration
-        shake.timingFunction = CAMediaTimingFunction(name: .linear)
-        shake.beginTime = layer.convertTime(began, from: nil)
-        layer.add(shake, forKey: "preview-drop-reject")
     }
 }
 
@@ -2807,13 +2780,18 @@ final class MiniPreviewView: NSView {
               let handle = captures_preview_reorder_new_v1(artifactIDs.count, from, anchoredAtTop,
                                                            Self.nowMs, NativeMotion.reduceMotion)
         else { return false }
+        startReorder(handle, id: id, card: card)
+        return true
+    }
+
+    private func startReorder(_ handle: OpaquePointer, id: String, card: MiniPreviewCardView) {
         reorder = (handle, id)
         if let owner = tooltipOwner { setTooltip(for: owner, visible: false) }
         card.carrying = true
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tickReorder() }
         RunLoop.main.add(timer, forMode: .common)
         reorderTimer = timer
-        return true
+        tickReorder()
     }
 
     /// Returns whether the pointer left the stack, so the press becomes a
@@ -2894,13 +2872,28 @@ final class MiniPreviewView: NSView {
         }
     }
 
-    func rejectDrop(for artifactID: String) { cards[artifactID]?.rejectDrop() }
-
-    func continueRejections(from previous: MiniPreviewView) {
-        for (id, card) in cards {
-            guard let old = previous.cards[id], !old.isExiting, let began = old.dropRejectedAt else { continue }
-            card.rejectDrop(startedAt: began)
+    /// `id`'s file came back onto the stack at `screenPoint`: its index and
+    /// the slot under the pointer, or nil when the stack cannot move it.
+    func landing(for id: String, at screenPoint: NSPoint) -> (from: Int, to: Int)? {
+        guard !stackCollapsed, reorder == nil, exitingArtifactIDs.isEmpty, artifactIDs.count >= 2,
+              let window, let from = artifactIDs.firstIndex(of: id), let card = cards[id] else { return nil }
+        let y = document.convert(window.convertPoint(fromScreen: screenPoint), from: nil).y
+        let half = card.frame.height / 2
+        let distance = { (index: Int) -> CGFloat in
+            self.restLayouts[self.artifactIDs[index]].map { abs(CGFloat($0.y) + half - y) } ?? .infinity
         }
+        guard let to = artifactIDs.indices.min(by: { distance($0) < distance($1) }) else { return nil }
+        return (from, to)
+    }
+
+    /// The card returns into chronological `to` as if carried there: the
+    /// cards it passes glide out of its way, then the order commits.
+    func beginLanding(_ id: String, from: Int, to: Int) {
+        guard reorder == nil, let card = cards[id],
+              let handle = captures_preview_reorder_landing_v1(artifactIDs.count, from, to, anchoredAtTop,
+                                                               Self.nowMs, NativeMotion.reduceMotion)
+        else { return }
+        startReorder(handle, id: id, card: card)
     }
 
     /// Shipping `thumbnail-arrive`: a newly decoded card rises, fades in and
@@ -3835,11 +3828,28 @@ final class MiniPreviewController {
         return true
     }
 
-    /// A card carried within the stack settled at chronological `index`.
+    /// A card's file was dropped back on its stack: it returns into the slot
+    /// under the pointer, as a reorder would. A dock whose gap has closed
+    /// moves the card there at once and reopens the gap there; otherwise the
+    /// cards it passes glide out of its way while it returns.
+    private func landDragOut(_ artifactID: String, at point: NSPoint) {
+        let view = panel?.previewView
+        let landing = view?.landing(for: artifactID, at: point)
+        let closed = view?.dragOut.map { $0.id == artifactID && $0.pose.slot < 0.5 } ?? false
+        endDragOut(artifactID, dropped: false)
+        guard let view, let landing, landing.from != landing.to else { return }
+        if closed { commitReorder(artifactID, to: landing.to) }
+        else { view.beginLanding(artifactID, from: landing.from, to: landing.to) }
+    }
+
+    /// A card carried within the stack settled at chronological `index`. A
+    /// returning drag keeps its pose in the rebuilt stack.
     private func commitReorder(_ artifactID: String, to index: Int) {
+        let pose = panel?.previewView.dragOut.flatMap { $0.id == artifactID ? $0.pose : nil }
         guard stack.move(artifactID, to: index) else { return }
         makePanel(reusingCards: true)
         updateVisibility()
+        if let pose { panel?.previewView.setDragOut(artifactID, pose: pose) }
     }
 
     func close() {
@@ -3949,8 +3959,7 @@ final class MiniPreviewController {
             }
             self.panel?.previewView.setFileDragging(false, for: id)
             if self.panel?.frame.contains(point) == true {
-                self.endDragOut(id, dropped: false)
-                self.panel?.previewView.rejectDrop(for: id)
+                self.landDragOut(id, at: point)
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
                 $0 !== self.panel && $0.isVisible && $0.frame.contains(point)
             }) {
@@ -3965,7 +3974,6 @@ final class MiniPreviewController {
         updateEditorPresence(animated: false)
         if let previous {
             next.previewView.continueFileDrags(from: previous.previewView)
-            next.previewView.continueRejections(from: previous.previewView)
         }
         for id in liveIDs {
             next.previewView.card(for: id)?.setMainActionBusy(busyActions[id] == cardGenerations[id] && busyActions[id] != nil)

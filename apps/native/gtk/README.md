@@ -270,9 +270,9 @@ the physical X11, GNOME Wayland and KDE Wayland runs.
 Dragging a preview card's image into another app drags its file
 (`text/uri-list`, as History). While the file is out, the card's slot shows
 the style chosen in Preferences' "When you drag a preview out" row, read when
-the drag begins: Frosted imprint (the default; a blurred, dimmed echo of the
-capture behind a hairline, without chrome, at 0.97 scale), Dock gap (the card
-lifts, fades and shrinks away while its slot closes) or Quiet well (a recessed
+the drag begins: Dock gap (the default; the card lifts, holds a beat, then
+fades and shrinks away while its slot eases shut), Frosted imprint (a blurred,
+dimmed echo of the capture behind a hairline, without chrome, at 0.97 scale) or Quiet well (a recessed
 veil tile with one "out" glyph). Curves, durations and rules come from the
 shared `captures_app::preview_drag_style`; the pile applies its `CardPose` per
 frame on the frame clock (only while something moves), with the frost as one
@@ -281,7 +281,8 @@ An accepted drop elsewhere fades and shrinks the imprint, then closes the slot
 smoothly: older cards move toward the stack's anchored edge (down on a bottom
 corner, up toward a top corner's top edge) and the card leaves, and the
 window shrinks, only once the slot has closed. Cancelling, a refusal or a drop
-back on the stack returns the card (the last also shakes it). A mostly
+back on the stack returns the card; on the stack it lands in the slot under
+the pointer, like a reorder (a closed dock gap reopens there). A mostly
 vertical press on a card of an expanded stack of two or more reorders instead:
 the card lifts and follows the pointer, the cards it passes glide aside, and on
 release it glides into its slot and the stack's order changes. A pointer that
