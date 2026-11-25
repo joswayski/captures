@@ -423,6 +423,14 @@ struct Notice {
     started: Instant,
     restart_at: Option<Instant>,
     animating: bool,
+    /// An update's card height fitted to its painted content; the shared
+    /// estimate is the most it takes.
+    fit: Option<f64>,
+    /// The offered card's fitted height, held while its list stays on to
+    /// download and restart (`ViewState::follow`).
+    held: f64,
+    /// The last paint fitted a new height: place the card again.
+    refit: bool,
 }
 
 impl Drop for Notice {
@@ -500,6 +508,9 @@ fn open(live: Live) -> Result<()> {
                 started: Instant::now(),
                 restart_at: None,
                 animating: false,
+                fit: None,
+                held: 0.,
+                refit: false,
             })
         });
         if placement.caret == Caret::None && tray_notice::should_retry_tray_rect() {
@@ -652,7 +663,7 @@ impl Notice {
     /// physical recheck lost the caret and moved the card 8 pt left after a
     /// height change); the icon has not moved, so neither does the notice.
     fn replace(&mut self) {
-        let height = self.presentation.card_height;
+        let height = self.height();
         (self.placement, self.scale) = anchored(tray_rect(self.tray), &mut self.anchor, height);
         self.place();
     }
@@ -683,7 +694,7 @@ impl Notice {
             self.attempts += 1;
         }
         let found = if open { None } else { (self.tray)() };
-        let height = self.presentation.card_height;
+        let height = self.height();
         let (placement, scale) = anchored(found, &mut self.anchor, height);
         let caret = placement.caret != Caret::None;
         let hwnd = self.hwnd;
@@ -715,6 +726,10 @@ impl Notice {
         }
     }
 
+    fn height(&self) -> f64 {
+        self.fit.unwrap_or(self.presentation.card_height)
+    }
+
     fn place(&mut self) {
         let p = self.placement;
         let s = self.scale as f64;
@@ -740,6 +755,9 @@ impl Notice {
         let changed = restarting != self.restart_at.is_some();
         if let Err(error) = self.render() {
             eprintln!("failed to draw the Captures update notice: {error}");
+        }
+        if std::mem::take(&mut self.refit) {
+            self.replace();
         }
         if changed && restarting {
             self.play(Motion::UpdateNoticeRestartExit);
@@ -831,6 +849,7 @@ impl Notice {
             self.notes = painted.notes;
             self.link = painted.link;
             self.scroll = self.scroll.min(self.scroll_max);
+            self.fit_to(painted.fitted);
         }
         let (glow, on, _) = self.glow;
         // The spinner, an indeterminate bar, the restart bar and the version
@@ -855,6 +874,30 @@ impl Notice {
             }
         }
         unsafe { dcomp.Commit() }
+    }
+
+    /// Shrink an update's card to its painted content (the shared estimate
+    /// is the most it takes), holding the offered card's height while its
+    /// list stays on to download and restart.
+    fn fit_to(&mut self, fitted: Option<f32>) {
+        let Some(fitted) = fitted else {
+            (self.fit, self.held) = (None, 0.);
+            return;
+        };
+        let estimate = self.presentation.card_height;
+        let mut height = f64::from(fitted).min(estimate);
+        match self.presentation.visual_state.as_str() {
+            "available" => self.held = height,
+            "downloading" | "restarting" if self.presentation.notes.is_some() => {
+                height = height.max(self.held).min(estimate);
+            }
+            _ => self.held = 0.,
+        }
+        // A work-area clamp can keep the card from that height: fit once.
+        if self.fit != Some(height) && (height - self.placement.card_rect().height).abs() > 0.5 {
+            self.fit = Some(height);
+            self.refit = true;
+        }
     }
 
     /// Step the version link's hover and return it eased: 0 at rest, 1
@@ -1025,6 +1068,9 @@ pub struct Painted {
     pub notes: Option<D2D_RECT_F>,
     /// The version link's part.
     pub link: Option<u32>,
+    /// An update's card height for its content: the header, the list at its
+    /// natural height and the footer bar. `None` on other cards.
+    pub fitted: Option<f32>,
 }
 
 /// Wrapped text at `size`/`weight`, with a CSS `line-height` multiplier.
@@ -1933,6 +1979,8 @@ pub fn paint(
     let (bx0, bx1) = (left + s6, right - s6);
     let mut scroll_max = 0.;
     let mut notes_view = None;
+    // An update's body at its content's natural height, for `Painted::fitted`.
+    let mut body_need = 0.;
     if let Some((notes, heading, intro, empty, groups)) = &notes {
         let (section, ix, mut iy) = if update {
             // One list under a hairline, straight on the card.
@@ -1972,6 +2020,9 @@ pub fn paint(
                 true,
             );
             iy += intro.height + s4;
+        }
+        if let Some((empty, _)) = empty {
+            body_need = iy - body_top + empty.height + 1. + s5;
         }
         if let Some((empty, range)) = empty {
             part(
@@ -2031,6 +2082,7 @@ pub fn paint(
                 }
             }
             scroll_max = (natural - (view.bottom - view.top)).max(0.);
+            body_need = iy - body_top + natural + 1. + s5;
             let scroll = ui.scroll.clamp(0., scroll_max);
             notes_view = Some(view);
             unsafe { dc.PushAxisAlignedClip(&view, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
@@ -2408,6 +2460,8 @@ pub fn paint(
         scroll_max,
         notes: notes_view,
         link: version_link,
+        // Inside the 1-DIP border.
+        fitted: update.then_some(header_h + body_need + footer_h + 2.),
     })
 }
 
@@ -2550,20 +2604,11 @@ pub fn render_offscreen(
     let work = LogicalRect::new(0., 0., w, h - 48.);
     let tray = (options.tool.as_deref() != Some("fallback"))
         .then(|| LogicalRect::new(w - 160., h - 44., 24., 40.));
-    let placement = notice::placement(
-        screen,
-        work,
-        tray,
-        false,
-        notice::CARD_WIDTH,
-        presentation.card_height,
-    );
+    let place =
+        move |height: f64| notice::placement(screen, work, tray, false, notice::CARD_WIDTH, height);
+    let placement = place(presentation.card_height);
     debug_assert!(tray.is_none() || placement.caret == Caret::Bottom);
     Ok(move |dc: &ID2D1DeviceContext| {
-        let mut base = windows_numerics::Matrix3x2::identity();
-        unsafe { dc.GetTransform(&mut base) };
-        let at = windows_numerics::Matrix3x2::translation(placement.x as f32, placement.y as f32);
-        unsafe { dc.SetTransform(&(at * base)) };
         let ui = Ui {
             hover: None,
             scroll: 0.,
@@ -2571,6 +2616,20 @@ pub fn render_offscreen(
             restart: 1.,
             link: 0.,
         };
+        // As the live notice: measure an update's card at the estimate
+        // (clipped to nothing), then paint it at its fitted height.
+        let nothing = rect(0., 0., 0., 0.);
+        unsafe { dc.PushAxisAlignedClip(&nothing, D2D1_ANTIALIAS_MODE_ALIASED) };
+        let measured = paint(dc, &g, &t, &presentation, &placement, &ui);
+        unsafe { dc.PopAxisAlignedClip() };
+        let placement = match measured?.fitted {
+            Some(fitted) => place(f64::from(fitted).min(presentation.card_height)),
+            None => placement,
+        };
+        let mut base = windows_numerics::Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        let at = windows_numerics::Matrix3x2::translation(placement.x as f32, placement.y as f32);
+        unsafe { dc.SetTransform(&(at * base)) };
         let result = paint(dc, &g, &t, &presentation, &placement, &ui).map(|_| ());
         unsafe { dc.SetTransform(&base) };
         result

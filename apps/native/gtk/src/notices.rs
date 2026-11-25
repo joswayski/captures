@@ -685,6 +685,8 @@ pub struct UpdateNotice {
     live: RefCell<Live>,
     tick: RefCell<Option<glib::SourceId>>,
     restart_started: Cell<Option<i64>>,
+    /// The offered card's fitted height, held while its list downloads and restarts.
+    held: Cell<i32>,
 }
 
 pub fn update(app: &gtk::Application, settings_file: PathBuf, fixture: &str) -> Rc<UpdateNotice> {
@@ -742,6 +744,7 @@ fn update_notice(
         live: RefCell::default(),
         tick: RefCell::default(),
         restart_started: Cell::default(),
+        held: Cell::default(),
     });
     // Escape dismisses unless a download or restart is running.
     let keys = gtk::EventControllerKey::new();
@@ -998,6 +1001,7 @@ impl UpdateNotice {
         // `.update-notice-body`: notes, progress, restart, error or status.
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.add_css_class("update-notice-body");
+        let mut fitted_list: Option<gtk::ScrolledWindow> = None;
         if let Some(notes) = &p.notes {
             let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
             section.add_css_class("update-notes");
@@ -1063,15 +1067,17 @@ impl UpdateNotice {
                     "update-notes-empty",
                 ));
             } else {
-                // Long notes scroll inside the card's fixed height.
+                // Long notes scroll inside the card's fixed height; an
+                // update's card first asks for its list's natural height.
                 let scroller = gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
-                    .propagate_natural_height(false)
+                    .propagate_natural_height(update_layout)
                     .vexpand(true)
                     .child(&groups)
                     .build();
                 scroller.add_css_class("update-notes-scroll");
                 section.append(&scroller);
+                fitted_list = Some(scroller);
             }
             body.append(&section);
         }
@@ -1255,6 +1261,34 @@ impl UpdateNotice {
             });
             card.append(&row);
         }
+        if update_layout {
+            self.fit(p, fitted_list.as_ref());
+        }
+    }
+
+    /// Shrink an update's card from the shared estimate to its content, the
+    /// list at its natural height; longer lists scroll at the estimate. It
+    /// holds the offered card's height while that list stays on to download
+    /// and restart (`ViewState::follow`).
+    fn fit(&self, p: &Presentation, list: Option<&gtk::ScrolledWindow>) {
+        let card = &self.card;
+        let (width, estimate) = (p.card_width as i32, p.card_height as i32);
+        card.set_size_request(width, -1);
+        let (_, natural, _, _) = card.measure(gtk::Orientation::Vertical, width);
+        let mut height = natural.min(estimate);
+        if natural > estimate
+            && let Some(list) = list
+        {
+            list.set_propagate_natural_height(false);
+        }
+        match p.visual_state.as_str() {
+            "available" => self.held.set(height),
+            "downloading" | "restarting" if p.notes.is_some() => {
+                height = height.max(self.held.get()).min(estimate);
+            }
+            _ => self.held.set(0),
+        }
+        card.set_size_request(width, height);
     }
 }
 

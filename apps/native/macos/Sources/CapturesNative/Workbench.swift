@@ -2715,7 +2715,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard let data = representation.representation(using: .png, properties: [:]) else { return }
         do {
             try data.write(to: URL(fileURLWithPath: path), options: .atomic)
-            Metrics.write(["event": "screenshot", "path": path, "window": window.windowNumber])
+            Metrics.write(["event": "screenshot", "path": path, "window": (view.window ?? window).windowNumber])
         } catch { Metrics.write(["event": "screenshot-error", "detail": error.localizedDescription]) }
     }
 

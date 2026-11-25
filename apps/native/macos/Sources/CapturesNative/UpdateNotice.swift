@@ -546,6 +546,9 @@ final class UpdateNoticeView: NSView {
     private let tokens: Tokens
     private var targets: [UpdateNoticeButtonTarget] = []
     var onAction: (UpdateNoticeAction) -> Void = { _ in }
+    /// An update's card height for its rendered content: the header, the
+    /// list at its natural height and the footer bar. Nil on other cards.
+    private(set) var fittedHeight: CGFloat?
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, tokens: Tokens) {
@@ -603,6 +606,7 @@ final class UpdateNoticeView: NSView {
     func render(_ p: UpdateNoticePresentation, placement: UpdateNoticePlacement) {
         subviews.forEach { $0.removeFromSuperview() }
         targets.removeAll()
+        fittedHeight = nil
         layer?.sublayers?.filter { $0.name == "update-caret" }.forEach { $0.removeFromSuperlayer() }
         let cardFrame = NSRect(x: placement.card.minX, y: placement.card.minY,
                                width: placement.card.width, height: placement.card.height)
@@ -800,6 +804,7 @@ final class UpdateNoticeView: NSView {
 
         // Body.
         var y = headerBottom
+        var listHeight: CGFloat = 0
         if let notes = p.notes {
             let box: NSView
             var innerY: CGFloat, innerX: CGFloat
@@ -927,6 +932,7 @@ final class UpdateNoticeView: NSView {
             // Links carry their own colours; tags change on hover.
             list.linkTextAttributes = [.cursor: NSCursor.pointingHand]
             list.hoverColor = tokens.color("text")
+            listHeight = innerY + list.fittingHeight() + s5
             list.frame.size.height = max(list.fittingHeight(), scroll.frame.height)
             list.setAccessibilityLabel(notes.heading)
             let releaseURLs = Set([notes.emptyLink?.url].compactMap { $0 } + notes.groups.compactMap { $0.tag?.url })
@@ -936,6 +942,7 @@ final class UpdateNoticeView: NSView {
             scroll.documentView = list
             box.addSubview(scroll)
         }
+        if update { fittedHeight = headerBottom + listHeight + (heightTotal - barTop) }
         // On an update's card, progress sits in the footer bar under its note.
         let progressBox = { [self] (y: CGFloat) -> NSView in
             if update {
@@ -1067,6 +1074,8 @@ final class UpdateNoticeController {
     /// When shipping's `update-restart-exit` (3 s into the restart state) ends;
     /// the stub "restart" keeps the faded card until then.
     private(set) var restartExitEnd: Date?
+    /// The offered card's fitted height, held while its list downloads and restarts.
+    private var heldHeight: CGFloat = 0
 
     init(tokens: Tokens, tray: String = "top", model: UpdateNoticeModel = UpdateNoticeModel()) {
         self.tokens = tokens; self.tray = tray; self.model = model
@@ -1113,7 +1122,7 @@ final class UpdateNoticeController {
                 default: trayRect = CGRect(x: monitor.maxX - 180, y: monitor.minY, width: 24, height: 24)
                 }
             }
-            let placement = try model.placement(monitor: monitor, workArea: workArea, tray: trayRect,
+            var placement = try model.placement(monitor: monitor, workArea: workArea, tray: trayRect,
                 cardWidth: presentation.cardWidth, cardHeight: presentation.cardHeight)
             let frame = UpdateNoticePlacement.cocoaFrame(placement.frame, primaryHeight: primaryHeight)
             let created = panel == nil
@@ -1134,6 +1143,28 @@ final class UpdateNoticeController {
             panel?.setFrame(frame, display: false)
             view?.frame = NSRect(origin: .zero, size: frame.size)
             view?.render(presentation, placement: placement)
+            // The shared height estimates each change's rows; an update's card
+            // shrinks to its rendered list, and holds the offered card's
+            // height while that list stays on to download and restart.
+            if let fitted = view?.fittedHeight {
+                var height = min(fitted, presentation.cardHeight)
+                switch presentation.visualState {
+                case "available": heldHeight = height
+                case "downloading", "restarting":
+                    if presentation.notes != nil { height = min(max(height, heldHeight), presentation.cardHeight) }
+                default: heldHeight = 0
+                }
+                if abs(height - placement.card.height) > 0.5 {
+                    placement = try model.placement(monitor: monitor, workArea: workArea, tray: trayRect,
+                        cardWidth: presentation.cardWidth, cardHeight: height)
+                    let frame = UpdateNoticePlacement.cocoaFrame(placement.frame, primaryHeight: primaryHeight)
+                    panel?.setFrame(frame, display: false)
+                    view?.frame = NSRect(origin: .zero, size: frame.size)
+                    view?.render(presentation, placement: placement)
+                }
+            } else {
+                heldHeight = 0
+            }
             panel?.orderFrontRegardless()
             panel?.ignoresMouseEvents = false
             if let view {
