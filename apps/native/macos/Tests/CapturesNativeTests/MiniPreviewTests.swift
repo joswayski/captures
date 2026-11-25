@@ -314,7 +314,14 @@ final class MiniPreviewTests: XCTestCase {
             }
             XCTAssertTrue(pointerTarget(saveFrame.midX, saveFrame.midY), "Save file shows the pointing hand")
             XCTAssertTrue(pointerTarget(right ? 262 : 22, 22), "Delete shows the pointing hand")
-            XCTAssertFalse(pointerTarget(140, 22), "the card body between controls keeps the arrow")
+            XCTAssertFalse(pointerTarget(140, 22), "the card body between controls is not a control")
+            let body = view.convert(NSPoint(x: 140, y: 22), from: card)
+            XCTAssertNil(view.pointerCursor(at: body), "a card without a prepared file keeps the arrow")
+            card.preparedDragPath = "/tmp/card.png"
+            XCTAssertEqual(view.pointerCursor(at: body), .openHand, "a draggable card body shows the open hand")
+            XCTAssertEqual(view.pointerCursor(at: view.convert(NSPoint(x: saveFrame.midX, y: saveFrame.midY), from: card)),
+                           .pointingHand, "controls on a draggable card keep the pointing hand")
+            card.preparedDragPath = nil
             try write(render(panel), name: "mini-preview-hover-\(right ? "right" : "left")")
             card.updateSaveButton(saved: true)
             XCTAssertEqual(try button("Show in Folder").frame, saveFrame)

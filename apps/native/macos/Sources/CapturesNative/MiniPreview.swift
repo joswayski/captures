@@ -1497,6 +1497,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     override func mouseDown(with event: NSEvent) {
         press = event.locationInWindow
         setFileDragging(false)
+        // Shipping `grabbing` while the card is held; the drag session's own
+        // cursor takes over once the file leaves the card.
+        if isOutboundFileDragEnabled { NSCursor.closedHand.set() }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -1511,6 +1514,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     override func mouseUp(with event: NSEvent) {
         press = nil
+        if isOutboundFileDragEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) {
+            NSCursor.openHand.set()
+        }
     }
 
     /// Shipping `.thumbnail-file-dragging` conceals the source beneath the ghost.
@@ -1638,13 +1644,18 @@ private final class MiniPreviewExpandButton: NSButton {
         let delta = NSSize(width: current.x - press.x, height: current.y - press.y)
         // Shipping's collapsed-pile threshold is eight logical points, radial.
         guard dragging || hypot(delta.width, delta.height) >= 8 else { return }
+        // Shipping `.thumbnail-stack-dragging` shows `grabbing` while carried.
+        if !dragging { NSCursor.closedHand.set() }
         dragging = true
         move(NSPoint(x: frameOrigin.x + delta.width, y: frameOrigin.y + delta.height))
         carry(current)
     }
     override func mouseUp(with event: NSEvent) {
         let clicked = press != nil && !dragging && bounds.contains(convert(event.locationInWindow, from: nil))
-        if dragging { carry(nil) }
+        if dragging {
+            carry(nil)
+            (bounds.contains(convert(event.locationInWindow, from: nil)) ? NSCursor.pointingHand : .arrow).set()
+        }
         press = nil; dragging = false
         fan(bounds.contains(convert(event.locationInWindow, from: nil)))
         if clicked { actionBlock() }
@@ -2428,31 +2439,40 @@ final class MiniPreviewView: NSView {
     /// once instead of overriding cursors elsewhere on screen.
     private var showsHandCursor = false
 
-    /// Shipping `button { cursor: pointer }` and the minimized pile's pointer.
+    /// Shipping `button { cursor: pointer }`, the minimized pile's pointer and
+    /// `.thumbnail-card { cursor: grab }` on a draggable card body.
     /// The nonactivating panel is rarely key, and AppKit applies cursor rects
     /// only in the key window, so set the cursor on every pointer sample as
     /// the Tauri host does. `BackgroundCursor` lets that take effect while
     /// Captures is not the active app.
     private func updateCursor(at point: NSPoint?) {
-        if let point, pointerTarget(at: point) {
-            NSCursor.pointingHand.set(); showsHandCursor = true
+        if let point, let cursor = pointerCursor(at: point) {
+            cursor.set(); showsHandCursor = true
         } else if showsHandCursor {
             NSCursor.arrow.set(); showsHandCursor = false
         }
     }
 
-    /// Whether `point` (this view's coordinates) is over an enabled preview control.
-    func pointerTarget(at point: NSPoint) -> Bool {
+    /// The hand `point` (this view's coordinates) shows: pointing over an
+    /// enabled preview control, open over a card that drags out as a file,
+    /// nil (the arrow) elsewhere.
+    func pointerCursor(at point: NSPoint) -> NSCursor? {
         var view = hitTest(superview.map { convert(point, to: $0) } ?? point)
         while let current = view, current !== self {
             if let button = current as? NSButton {
                 return button.isEnabled && (button is MiniPreviewButton
-                    || button is MiniPreviewOverflowCue || button is MiniPreviewExpandButton)
+                    || button is MiniPreviewOverflowCue || button is MiniPreviewExpandButton) ? .pointingHand : nil
+            }
+            if let card = current as? MiniPreviewCardView {
+                return card.isOutboundFileDragEnabled ? .openHand : nil
             }
             view = current.superview
         }
-        return false
+        return nil
     }
+
+    /// Whether `point` (this view's coordinates) is over an enabled preview control.
+    func pointerTarget(at point: NSPoint) -> Bool { pointerCursor(at: point) == .pointingHand }
 
     /// Hold card hover off after an expand or a new capture until the pointer
     /// really moves. A pointer already outside the stack releases it at once.
