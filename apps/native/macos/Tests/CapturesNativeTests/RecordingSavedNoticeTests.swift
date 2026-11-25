@@ -86,7 +86,7 @@ final class RecordingSavedNoticeTests: XCTestCase {
         for appearance in ["light", "dark"] {
             let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
             let view = RecordingSavedNoticeView(
-                frame: NSRect(x: 0, y: 0, width: 440, height: 116), tokens: tokens)
+                frame: NSRect(origin: .zero, size: RecordingSavedNoticeView.size), tokens: tokens)
             let window = NSWindow(contentRect: view.bounds, styleMask: [.borderless],
                 backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false; window.contentView = view
@@ -103,27 +103,28 @@ final class RecordingSavedNoticeTests: XCTestCase {
         }
     }
 
-    func testNoticeIsOneRowOfCheckTileCopyAndIconButtonWithAQuietDismiss() throws {
+    func testNoticeIsOneRowOfCheckBadgeCopyButtonAndRoundDismissInsideTheCard() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
-        let view = RecordingSavedNoticeView(frame: NSRect(x: 0, y: 0, width: 440, height: 116), tokens: tokens)
-        let padding = tokens.number("s-5")
-        XCTAssertEqual(view.tile.frame, NSRect(x: padding, y: 39, width: 38, height: 38))
+        let view = RecordingSavedNoticeView(frame: NSRect(origin: .zero, size: RecordingSavedNoticeView.size), tokens: tokens)
+        let card = view.cardRect, padding = tokens.number("s-5"), side = tokens.number("h-sm")
+        XCTAssertEqual(card.size, NSSize(width: 420, height: 68))
+        XCTAssertEqual(view.tile.frame, NSRect(x: card.minX + 1 + padding, y: card.midY - 12, width: 24, height: 24))
         XCTAssertEqual(view.tile.glyph, "check")
-        XCTAssertFalse(view.subviews.contains { ($0 as? NSTextField)?.stringValue == "●" },
-                       "the check tile replaces the text glyph")
+        XCTAssertEqual(view.dismissButton.frame,
+            NSRect(x: card.maxX - tokens.number("s-3") - side, y: card.midY - side / 2, width: side, height: side))
         for state: RecordingSavedNoticeState in [.ready, .saved(path: "/Captures/movie.mp4"),
                                                  .error(message: "Folder is unavailable", retry: .save)] {
             view.update(state)
             let button = view.primaryButton.frame
-            XCTAssertEqual(button.midY, view.bounds.midY, accuracy: 0.5, "one row: the button is centred")
-            XCTAssertEqual(button.maxX, view.bounds.width - 38, accuracy: 0.5)
-            XCTAssertEqual(button.height, tokens.number("h-md"))
-            let copy = view.subviews.compactMap { $0 as? NSTextField }
-            for label in copy {
+            XCTAssertEqual(button.midY, card.midY, accuracy: 0.5, "one row: the button is centred")
+            XCTAssertEqual(button.maxX, view.dismissButton.frame.minX - tokens.number("s-2"), accuracy: 0.5)
+            XCTAssertEqual(button.height, side)
+            for label in view.subviews.compactMap({ $0 as? NSTextField }) {
                 XCTAssertGreaterThanOrEqual(label.frame.minX, view.tile.frame.maxX + padding - 0.5)
                 XCTAssertLessThanOrEqual(label.frame.maxX, button.minX - padding + 0.5,
                                          "\(label.stringValue) stays left of the button")
+                XCTAssertTrue(card.contains(label.frame), "\(label.stringValue) stays inside the card")
             }
             guard case .shipping(let name)? = view.primaryButton.icon else {
                 return XCTFail("the action button leads with a shipping icon")
@@ -131,7 +132,6 @@ final class RecordingSavedNoticeTests: XCTestCase {
             XCTAssertEqual(name, state == .ready || state == .error(message: "Folder is unavailable", retry: .save)
                 ? "save" : "folder")
         }
-        XCTAssertEqual(view.dismissButton.frame, NSRect(x: 406, y: 10, width: 24, height: 24))
         XCTAssertTrue(view.dismissButton.iconOnly)
         guard case .shipping("close")? = view.dismissButton.icon else {
             return XCTFail("dismiss is the shipping ×, not a Dismiss text button")
@@ -148,9 +148,10 @@ final class RecordingSavedNoticeTests: XCTestCase {
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertFalse(panel.hidesOnDeactivate)
         XCTAssertEqual(panel.sharingType, .none)
-        XCTAssertEqual(panel.frame.size, NSSize(width: 440, height: 116))
-        XCTAssertEqual(panel.frame.maxX, screen.visibleFrame.maxX - 20, accuracy: 0.1)
-        XCTAssertEqual(panel.frame.maxY, screen.visibleFrame.maxY - 20, accuracy: 0.1)
+        let pad = RecordingSavedNoticeView.pad
+        XCTAssertEqual(panel.frame.size, RecordingSavedNoticeView.size)
+        XCTAssertEqual(panel.frame.maxX - pad, screen.visibleFrame.maxX - 20, accuracy: 0.1)
+        XCTAssertEqual(panel.frame.maxY - pad, screen.visibleFrame.maxY - 20, accuracy: 0.1)
     }
 
     private func render(_ view: NSView, window: NSWindow, name: String) throws {

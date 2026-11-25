@@ -30,7 +30,7 @@ use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::Options;
-use crate::gfx::{self, Gfx, Style, rect};
+use crate::gfx::{self, Gfx, rect};
 use crate::panel_uia;
 use crate::tokens::Tokens;
 
@@ -38,10 +38,10 @@ type Rect = D2D_RECT_F;
 
 const CLASS: PCWSTR = w!("CapturesRecordingReady");
 const TITLE: &str = "Recording saved";
-/// Shipping `RECORDING_SAVED_NOTICE_CARD_WIDTH` × `_HEIGHT`.
-const CARD: (f32, f32) = (440., 116.);
-/// Shipping `RECORDING_SAVED_NOTICE_FRAME_PAD`: transparent room for the
-/// glass shadow.
+/// The compact card, sized like the launch notice's caretless rectangle so
+/// the floating notices read as one family.
+const CARD: (f32, f32) = (420., 68.);
+/// Transparent room around the card; the top-right placement keeps it.
 pub const PAD: f32 = 28.;
 pub const SIZE: (f32, f32) = (CARD.0 + PAD * 2., CARD.1 + PAD * 2.);
 /// Shipping `RECORDING_SAVED_NOTICE_VISIBLE_FOR`.
@@ -89,7 +89,7 @@ impl State {
         self.error.as_deref().unwrap_or(if self.saved.is_some() {
             "Saved to your Captures folder."
         } else {
-            "Kept in Capture History for 30 days. Save a copy anytime."
+            "Kept in History for 30 days."
         })
     }
 
@@ -451,27 +451,29 @@ pub fn paint(
         unsafe { dc.PushLayer(&layer, None::<&ID2D1Layer>) };
     }
     let result = (|| -> Result<Parts> {
-        let radius = n("r-xl");
-        gfx::shadow(dc, card, radius, t.shadow("glass-shadow"))?;
-        gfx::fill_round(dc, card, radius, c("glass-strong"))?;
+        // The launch notice's card: solid glass, 1 px border and the compact
+        // tooltip shadow, which stays well inside `PAD`.
+        let radius = n("r-lg");
+        gfx::shadow(dc, card, radius, t.shadow("tooltip-shadow-compact"))?;
+        gfx::fill_round(dc, card, radius, c("glass-strong-solid"))?;
         gfx::border(dc, card, radius, 1., c("glass-border"))?;
         let p = parts(g, t, state, card);
 
-        // `.recording-saved-icon`: a 38 px positive tile, 20 px check.
-        let tile_left = card.left + 1. + n("s-5");
-        let tile = rect(tile_left, cy - 19., tile_left + 38., cy + 19.);
-        gfx::fill_round(dc, tile, n("r-lg"), c("positive"))?;
+        // A 24 px positive badge with a 14 px check.
+        let badge_left = card.left + 1. + n("s-5");
+        let badge = rect(badge_left, cy - 12., badge_left + 24., cy + 12.);
+        gfx::fill_round(dc, badge, 12., c("positive"))?;
         gfx::icon(
             dc,
             &g.factory,
             "check",
             &[],
-            (tile.left + 9., tile.top + 9., 20.),
-            2.2,
+            (badge.left + 5., badge.top + 5., 14.),
+            2.4,
             c("positive-ink"),
         )?;
 
-        // `.recording-saved-reveal`, at half opacity while busy.
+        // The action: a quiet glass button, at half opacity while busy.
         let (label, icon) = state.action();
         let alpha = if state.busy { 0.5 } else { 1. };
         let b = p.action;
@@ -481,14 +483,8 @@ pub fn paint(
             "glass-hover"
         };
         gfx::fill_round(dc, b, n("r-md"), t.color_alpha(fill, alpha))?;
-        gfx::border(
-            dc,
-            b,
-            n("r-md"),
-            1.,
-            t.color_alpha("glass-border-strong", alpha),
-        )?;
-        let text = g.text_sized(t, label, n("text-xs"), "weight-semibold", None)?;
+        gfx::border(dc, b, n("r-md"), 1., t.color_alpha("glass-border", alpha))?;
+        let text = g.text_sized(t, label, n("text-sm"), "weight-semibold", None)?;
         let ink = t.color_alpha("glass-text", alpha);
         let icon_left = b.left + 1. + n("s-4");
         gfx::icon(
@@ -508,16 +504,30 @@ pub fn paint(
             ink,
         )?;
 
-        // `.recording-saved-copy`: the title over the wrapped line.
-        let left = tile.right + n("s-5");
+        // The title over the muted line, as the launch notice sets them.
+        let left = badge.right + n("s-5");
         let width = (b.left - n("s-5") - left).max(1.);
-        let title = g.text_sized(t, state.title(), n("text-md"), "weight-semibold", None)?;
+        let title = g.text_sized(
+            t,
+            state.title(),
+            n("text-md"),
+            "weight-semibold",
+            Some("tracking-tight"),
+        )?;
         if title.width > width {
             g.ellipsis(&title, width)?;
         }
-        let detail = g.text(t, Style::Note, state.detail(), width)?;
-        let room = card.bottom - card.top - 2. - 2. * n("s-5");
-        let block = (title.height + 2. + detail.height).min(room);
+        let detail = crate::update_notice::para(
+            g,
+            t,
+            state.detail(),
+            (n("text-sm"), "weight-regular"),
+            Some("tracking-tight"),
+            None,
+            width,
+        )?;
+        let room = card.bottom - card.top - 2. - 2. * n("s-4");
+        let block = (title.height + n("s-1") + detail.height).min(room);
         let top = cy - block / 2.;
         gfx::text(dc, &title, left, top, c("glass-text"))?;
         unsafe {
@@ -530,25 +540,25 @@ pub fn paint(
             dc,
             &detail,
             left,
-            top + title.height + 2.,
+            top + title.height + n("s-1"),
             c("glass-text-muted"),
         );
         unsafe { dc.PopAxisAlignedClip() };
         drawn?;
 
-        // `.recording-saved-dismiss`: a quiet 24 px ×.
+        // Dismiss: the launch notice's round `h-sm` ×.
         let d = p.dismiss;
         let over = hover == Some(Part::Dismiss);
         if over {
-            gfx::fill_round(dc, d, n("r-sm"), c("glass-hover"))?;
+            gfx::fill_round(dc, d, (d.bottom - d.top) / 2., c("glass-hover"))?;
         }
         gfx::icon(
             dc,
             &g.factory,
             "close",
             &[],
-            (d.left + 5., d.top + 5., 14.),
-            2.,
+            (d.left + (d.right - d.left - 14.) / 2., cy - 7., 14.),
+            2. * 24. / 14.,
             c(if over {
                 "glass-text"
             } else {
@@ -566,29 +576,27 @@ pub fn paint(
     result
 }
 
-/// The buttons' rest rects: the action right of the copy, inside the card's
-/// 38 px right padding, and the dismiss `top: 10px; right: 10px`.
+/// The buttons' rest rects: Dismiss `s-3` inside the card's right edge,
+/// the action `s-2` left of it, both centered on the row.
 fn parts(g: &Gfx, t: &Tokens, state: &State, card: Rect) -> Parts {
     let n = |name: &str| t.n(name);
     let label = g
-        .text_sized(t, state.action().0, n("text-xs"), "weight-semibold", None)
+        .text_sized(t, state.action().0, n("text-sm"), "weight-semibold", None)
         .map_or(80., |text| text.width);
     let width = (2. * n("s-4") + 14. + n("s-3") + label + 2.).ceil();
-    let (right, cy, h) = (
-        card.right - 1. - 38.,
-        (card.top + card.bottom) / 2.,
-        n("h-md"),
+    let cy = (card.top + card.bottom) / 2.;
+    let side = n("h-sm");
+    let dismiss = rect(
+        card.right - n("s-3") - side,
+        cy - side / 2.,
+        card.right - n("s-3"),
+        cy + side / 2.,
     );
-    let dismiss_right = card.right - 1. - 10.;
+    let right = dismiss.left - n("s-2");
     Parts {
         card,
-        action: rect(right - width, cy - h / 2., right, cy + h / 2.),
-        dismiss: rect(
-            dismiss_right - 24.,
-            card.top + 1. + 10.,
-            dismiss_right,
-            card.top + 35.,
-        ),
+        action: rect(right - width, cy - side / 2., right, cy + side / 2.),
+        dismiss,
     }
 }
 
@@ -749,10 +757,7 @@ mod tests {
     fn copy_follows_shipping_for_ready_saving_saved_and_errors() {
         let mut s = State::default();
         assert_eq!(s.title(), "Recording ready");
-        assert_eq!(
-            s.detail(),
-            "Kept in Capture History for 30 days. Save a copy anytime."
-        );
+        assert_eq!(s.detail(), "Kept in History for 30 days.");
         assert_eq!(s.action(), ("Save file", "save"));
         s.busy = true;
         assert_eq!(s.action(), ("Saving…", "save"));

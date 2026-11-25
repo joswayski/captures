@@ -202,7 +202,7 @@ final class NativeMotionTests: XCTestCase {
         let controller = RecordingSavedNoticeController(tokens: tokens)
         controller.present(artifactID: "recording", screen: screen)
         let panel = try XCTUnwrap(controller.panel)
-        XCTAssertEqual(panel.frame.size, NSSize(width: 440, height: 116))
+        XCTAssertEqual(panel.frame.size, RecordingSavedNoticeView.size)
         XCTAssertEqual(panel.alphaValue, 1)
         XCTAssertEqual(panel.noticeView.layer?.opacity, 1)
         XCTAssertEqual(NativeMotion.isPlaying(on: panel.noticeView), !NativeMotion.reduceMotion)

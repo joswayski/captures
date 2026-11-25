@@ -1028,7 +1028,7 @@ pub struct Painted {
 }
 
 /// Wrapped text at `size`/`weight`, with a CSS `line-height` multiplier.
-fn para(
+pub(crate) fn para(
     g: &Gfx,
     t: &Tokens,
     copy: &str,

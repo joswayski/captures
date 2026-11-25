@@ -4136,24 +4136,26 @@ window.captures.recording-controls-window {
   font-weight: var(--weight-semibold);
   line-height: 13px;
 }
-/* Shipping `.recording-saved-notice` (the Recording ready notice). */
+/* The Recording ready notice: the launch notice's compact solid glass card
+   and shadow, one row of a positive badge, the copy, Save file and ×. */
 .captures .recording-saved-notice {
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-xl);
+  border-radius: var(--r-lg);
   color: var(--glass-text);
-  background: var(--glass-strong);
-  box-shadow: var(--glass-shadow);
+  background: var(--glass-strong-solid);
+  box-shadow: var(--tooltip-shadow-compact);
 }
 .captures .recording-saved-notice.animated {
   animation: recording-saved-lifecycle 15s var(--ease-standard) forwards;
 }
 .captures .recording-saved-row {
-  padding: var(--s-5) 38px var(--s-5) var(--s-5);
+  padding: 0 var(--s-3) 0 var(--s-5);
 }
 .captures .recording-saved-icon {
-  min-width: 38px;
-  min-height: 38px;
-  border-radius: var(--r-lg);
+  min-width: 24px;
+  min-height: 24px;
+  margin-right: var(--s-5);
+  border-radius: var(--r-pill);
   color: var(--positive-ink);
   background: var(--positive);
 }
@@ -4161,20 +4163,24 @@ window.captures.recording-controls-window {
   color: var(--glass-text);
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
+  letter-spacing: var(--brand-tracking);
+  line-height: var(--lh-tight-md);
 }
 .captures .recording-saved-text {
   color: var(--glass-text-muted);
-  font-size: var(--text-xs);
-  line-height: var(--lh-snug-xs);
+  font-size: var(--text-sm);
+  letter-spacing: var(--sm-tracking);
+  line-height: var(--lh-tight-sm);
 }
 .captures .recording-saved-reveal {
-  min-height: var(--h-md);
+  min-height: var(--h-sm);
+  margin: 0 var(--s-2) 0 var(--s-5);
   padding: 0 var(--s-4);
-  border: 1px solid var(--glass-border-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
   background: var(--glass-hover);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
 }
 .captures .recording-saved-reveal:hover {
@@ -4183,19 +4189,20 @@ window.captures.recording-controls-window {
 .captures .recording-saved-reveal:disabled {
   opacity: 0.5;
 }
-.captures .recording-saved-dismiss {
-  min-width: 24px;
-  min-height: 24px;
-  margin: 10px 10px 0 0;
-  padding: 0;
-  border: 0;
-  border-radius: var(--r-sm);
+.captures button.recording-saved-dismiss {
+  all: unset;
+  min-width: var(--h-sm);
+  min-height: var(--h-sm);
+  border-radius: var(--r-pill);
   color: var(--glass-text-subtle);
-  background: transparent;
 }
-.captures .recording-saved-dismiss:hover {
+.captures button.recording-saved-dismiss:hover {
   color: var(--glass-text);
   background: var(--glass-hover);
+}
+.captures button.recording-saved-dismiss:focus-visible {
+  color: var(--glass-text);
+  box-shadow: var(--focus-ring);
 }
 @keyframes recording-saved-lifecycle {
   0% {

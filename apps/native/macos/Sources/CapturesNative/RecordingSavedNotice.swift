@@ -72,10 +72,16 @@ final class RecordingSavedNoticeModel {
     func dismiss() { generation += 1; artifactID = nil; state = nil; changed() }
 }
 
-/// Shipping `.recording-saved-notice`: one row of a positive check tile, the
-/// copy and the action button (`grid-template-columns: 38px 1fr auto`, `gap`
-/// and padding `--s-5`), with a quiet 24 pt dismiss × in the top-right corner.
+/// The Recording ready notice: the launch notice's compact solid glass card
+/// and shadow inside a transparent frame, one row of a positive check badge,
+/// the copy, the action button and a round × like the launch notice's Close.
 final class RecordingSavedNoticeView: NSView {
+    /// The card, sized like the launch notice so the floating notices match.
+    static let card = NSSize(width: 420, height: 68)
+    /// Transparent room so the card's shadow is never clipped by the window.
+    static let pad: CGFloat = 28
+    static let size = NSSize(width: card.width + pad * 2, height: card.height + pad * 2)
+
     private let tokens: Tokens
     let tile: ShippingIconTile
     private let heading = NSTextField(labelWithString: "")
@@ -84,54 +90,68 @@ final class RecordingSavedNoticeView: NSView {
     let dismissButton: CaptureButton
 
     override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    var cardRect: NSRect { bounds.insetBy(dx: Self.pad, dy: Self.pad) }
 
     init(frame: NSRect, tokens: Tokens) {
         self.tokens = tokens
-        let padding = tokens.number("s-5")
-        tile = ShippingIconTile(frame: NSRect(x: padding, y: (frame.height - 38) / 2, width: 38, height: 38),
-            tokens: tokens, glyph: "check", fill: "positive", ink: "positive-ink",
-            glyphSide: 20, strokeUnits: 2.2)
-        primaryButton = CaptureButton("Save file", frame: NSRect(x: 0, y: 0, width: 0, height: tokens.number("h-md")),
+        let card = frame.insetBy(dx: Self.pad, dy: Self.pad).offsetBy(dx: -frame.minX, dy: -frame.minY)
+        tile = ShippingIconTile(frame: NSRect(x: card.minX + 1 + tokens.number("s-5"), y: card.midY - 12,
+            width: 24, height: 24), tokens: tokens, glyph: "check", fill: "positive", ink: "positive-ink",
+            glyphSide: 14, strokeUnits: 2.4)
+        tile.layer?.cornerRadius = 12
+        let side = tokens.number("h-sm")
+        primaryButton = CaptureButton("Save file", frame: NSRect(x: 0, y: 0, width: 0, height: side),
             tokens: tokens, glass: true) {}
-        // `.recording-saved-dismiss { top: 10px; right: 10px }`.
-        dismissButton = CaptureButton("Dismiss", frame: NSRect(x: frame.width - 34, y: 10, width: 24, height: 24),
-            tokens: tokens, glass: true) {}
+        dismissButton = CaptureButton("Dismiss", frame: NSRect(x: card.maxX - tokens.number("s-3") - side,
+            y: card.midY - side / 2, width: side, height: side), tokens: tokens, glass: true) {}
         super.init(frame: frame)
-        wantsLayer = true; layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        layer?.cornerRadius = tokens.number("r-xl"); layer?.borderWidth = 1
-        layer?.borderColor = tokens.color("glass-border").cgColor
-        layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.4
-        layer?.shadowRadius = 18; layer?.shadowOffset = NSSize(width: 0, height: -6)
+        wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
         setAccessibilityRole(.group); setAccessibilityLabel("Recording ready")
         addSubview(tile)
         heading.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .semibold)
         heading.textColor = tokens.color("glass-text"); heading.lineBreakMode = .byTruncatingTail
         addSubview(heading)
-        detail.font = .capturesUI(ofSize: tokens.number("text-xs"))
-        detail.textColor = tokens.color("glass-text-muted"); detail.maximumNumberOfLines = 3
-        // Truncating tail forces one line; shipping wraps the detail to two.
+        detail.font = .capturesUI(ofSize: tokens.number("text-sm"))
+        detail.textColor = tokens.color("glass-text-muted"); detail.maximumNumberOfLines = 2
         detail.lineBreakMode = .byWordWrapping; detail.cell?.truncatesLastVisibleLine = true
         addSubview(detail)
-        // `.recording-saved-reveal`: a 14 pt icon before an xs label.
-        primaryButton.textSize = tokens.number("text-xs"); primaryButton.iconSide = 14
+        primaryButton.textSize = tokens.number("text-sm"); primaryButton.iconSide = 14
         primaryButton.setAccessibilityLabel("Save recording file"); addSubview(primaryButton)
-        dismissButton.hudControl = true; dismissButton.iconOnly = true
+        dismissButton.hudControl = true; dismissButton.iconOnly = true; dismissButton.circular = true
         dismissButton.icon = .shipping("close"); dismissButton.iconSide = 14
         dismissButton.setAccessibilityLabel("Dismiss recording notice"); addSubview(dismissButton)
         update(.ready)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func draw(_ dirtyRect: NSRect) {
+        let card = cardRect, radius = tokens.number("r-lg")
+        let path = NSBezierPath(roundedRect: card, xRadius: radius, yRadius: radius)
+        NSGraphicsContext.saveGraphicsState()
+        // `--tooltip-shadow-compact`, as the launch notice draws it.
+        let layer = tokens.shadow("tooltip-shadow-compact")[0], shadow = NSShadow()
+        shadow.shadowColor = layer.nsColor
+        shadow.shadowBlurRadius = CGFloat(layer.blur / 2)
+        shadow.shadowOffset = NSSize(width: layer.x, height: -layer.y)
+        shadow.set()
+        tokens.color("glass-strong-solid").setFill(); path.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        let border = NSBezierPath(roundedRect: card.insetBy(dx: 0.5, dy: 0.5),
+            xRadius: radius - 0.5, yRadius: radius - 0.5)
+        tokens.color("glass-border").setStroke(); border.lineWidth = 1; border.stroke()
+    }
+
     func update(_ state: RecordingSavedNoticeState) {
         switch state {
         case .ready:
             heading.stringValue = "Recording ready"
-            detail.stringValue = "Kept in Capture History for 30 days. Save a copy anytime."
+            detail.stringValue = "Kept in History for 30 days."
             primaryButton.title = "Save file"; primaryButton.isEnabled = true
             primaryButton.icon = .shipping("save")
             primaryButton.setAccessibilityLabel("Save recording file")
         case .saving:
-            heading.stringValue = "Saving recording…"; detail.stringValue = "Choosing your Captures folder and saving a copy."
+            heading.stringValue = "Saving recording…"; detail.stringValue = "Saving a copy to your Captures folder."
             primaryButton.title = "Saving…"; primaryButton.isEnabled = false
             primaryButton.icon = .shipping("save")
         case .saved:
@@ -155,25 +175,25 @@ final class RecordingSavedNoticeView: NSView {
     }
 
     /// One row, sized from the measured button label and copy so any system
-    /// font keeps the tile, copy and button apart inside the card.
+    /// font keeps the badge, copy, button and × apart inside the card.
     private func layoutRow() {
-        let padding = tokens.number("s-5"), gap = tokens.number("s-5")
+        let card = cardRect, gap = tokens.number("s-5")
         let labelWidth = ceil((primaryButton.title as NSString).size(withAttributes:
-            [.font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)]).width)
+            [.font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)]).width)
         // `padding: 0 var(--s-4)`, the icon, `gap: var(--s-3)` and a 1 pt border.
         let buttonWidth = tokens.number("s-4") * 2 + 14 + tokens.number("s-3") + labelWidth + 2
-        let height = tokens.number("h-md")
-        primaryButton.frame = NSRect(x: bounds.width - 38 - buttonWidth, y: (bounds.height - height) / 2,
-                                     width: buttonWidth, height: height)
+        let height = tokens.number("h-sm")
+        primaryButton.frame = NSRect(x: dismissButton.frame.minX - tokens.number("s-2") - buttonWidth,
+            y: card.midY - height / 2, width: buttonWidth, height: height)
         let left = tile.frame.maxX + gap
         let width = max(0, primaryButton.frame.minX - gap - left)
         let headingHeight = ceil(heading.intrinsicContentSize.height)
-        let maxDetail = bounds.height - padding * 2 - headingHeight - 2
+        let maxDetail = card.height - tokens.number("s-4") * 2 - headingHeight - tokens.number("s-1")
         let detailHeight = min(maxDetail, ceil(detail.cell?.cellSize(forBounds:
             NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)).height ?? 0))
-        let top = floor((bounds.height - headingHeight - 2 - detailHeight) / 2)
+        let top = floor(card.midY - (headingHeight + tokens.number("s-1") + detailHeight) / 2)
         heading.frame = NSRect(x: left, y: top, width: width, height: headingHeight)
-        detail.frame = NSRect(x: left, y: heading.frame.maxY + 2, width: width, height: detailHeight)
+        detail.frame = NSRect(x: left, y: heading.frame.maxY + tokens.number("s-1"), width: width, height: detailHeight)
     }
 }
 
@@ -182,8 +202,10 @@ final class RecordingSavedNoticePanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
     init(screen: NSScreen, tokens: Tokens) {
-        let size = NSSize(width: 440, height: 116), visible = screen.visibleFrame
-        let origin = NSPoint(x: visible.maxX - size.width - 20, y: visible.maxY - size.height - 20)
+        // The card sits 20 pt from the work area's top-right corner; the
+        // transparent pad around it holds the shadow.
+        let size = RecordingSavedNoticeView.size, pad = RecordingSavedNoticeView.pad, visible = screen.visibleFrame
+        let origin = NSPoint(x: visible.maxX - size.width - 20 + pad, y: visible.maxY - size.height - 20 + pad)
         noticeView = RecordingSavedNoticeView(frame: NSRect(origin: .zero, size: size), tokens: tokens)
         super.init(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         title = "Recording ready"; isReleasedWhenClosed = false; isOpaque = false

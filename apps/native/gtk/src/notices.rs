@@ -435,9 +435,10 @@ pub fn startup(
 
 // --------------------------------------------------- recording ready ----
 
-/// Shipping `RECORDING_SAVED_NOTICE_CARD_WIDTH` × `_HEIGHT`.
-pub const RECORDING_READY_WIDTH: f64 = 440.;
-const RECORDING_READY_HEIGHT: f64 = 116.;
+/// The compact card, sized like the launch notice so the floating notices
+/// read as one family.
+pub const RECORDING_READY_WIDTH: f64 = 420.;
+const RECORDING_READY_HEIGHT: f64 = 68.;
 /// Shipping `RECORDING_SAVED_NOTICE_VISIBLE_FOR`: the 15 s lifecycle
 /// animation, then 200 ms before the window closes.
 const RECORDING_READY_VISIBLE_FOR: Duration = Duration::from_millis(15_200);
@@ -453,7 +454,7 @@ pub fn recording_ready(
     settings_file: PathBuf,
     entry: &captures_history::HistoryEntry,
 ) -> gtk::ApplicationWindow {
-    let card = gtk::Overlay::builder()
+    let card = gtk::Box::builder()
         .accessible_role(gtk::AccessibleRole::Status)
         .build();
     card.add_css_class("recording-saved-notice");
@@ -461,13 +462,14 @@ pub fn recording_ready(
         card.add_css_class("animated");
     }
     card.set_size_request(RECORDING_READY_WIDTH as i32, RECORDING_READY_HEIGHT as i32);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("recording-saved-row");
+    row.set_hexpand(true);
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
     tile.add_css_class("recording-saved-icon");
     tile.set_valign(gtk::Align::Center);
     tile.set_accessible_role(gtk::AccessibleRole::Presentation);
-    let check = Icon::new("check", 20).with_stroke(2.2);
+    let check = Icon::new("check", 14).with_stroke(2.4);
     check.set_halign(gtk::Align::Center);
     check.set_valign(gtk::Align::Center);
     check.set_vexpand(true);
@@ -488,14 +490,13 @@ pub fn recording_ready(
     action.set_valign(gtk::Align::Center);
     action.set_cursor_from_name(Some("pointer"));
     row.append(&action);
-    card.set_child(Some(&row));
     let dismiss = gtk::Button::new();
     dismiss.add_css_class("recording-saved-dismiss");
     dismiss.set_child(Some(&Icon::new("close", 14).with_stroke(2.)));
     dismiss.update_property(&[gtk::accessible::Property::Label("Dismiss")]);
-    dismiss.set_halign(gtk::Align::End);
-    dismiss.set_valign(gtk::Align::Start);
-    card.add_overlay(&dismiss);
+    dismiss.set_valign(gtk::Align::Center);
+    row.append(&dismiss);
+    card.append(&row);
 
     // Shipping's `permanentlySaved`, `busy` and `error`.
     let saved = Rc::new(RefCell::new(entry.saved_path.clone().map(PathBuf::from)));
@@ -517,7 +518,7 @@ pub fn recording_ready(
                 if saved {
                     "Saved to your Captures folder.".into()
                 } else {
-                    "Kept in Capture History for 30 days. Save a copy anytime.".into()
+                    "Kept in History for 30 days.".into()
                 }
             });
             detail.set_label(&line);
