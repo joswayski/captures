@@ -877,9 +877,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     /// The tray's Change Shortcut… row.
+    /// Scrolls on the next main-loop pass: a window Change… just reopened is
+    /// still taking its final size, which would clamp the scroll back to the top.
     func revealShortcuts() {
         if sectionViews["shortcuts"] == nil { shortcutsRevealPending = true }
-        else { reveal("shortcuts") }
+        else { DispatchQueue.main.async { [weak self] in self?.reveal("shortcuts") } }
     }
 
     // MARK: Shell
@@ -1056,7 +1058,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         installKeyViewLoop()
         if !rebuilding { revealHighlightIfNeeded() }
         if updatesRevealPending { updatesRevealPending = false; reveal("updates") }
-        if shortcutsRevealPending { shortcutsRevealPending = false; reveal("shortcuts") }
+        if shortcutsRevealPending {
+            shortcutsRevealPending = false
+            DispatchQueue.main.async { [weak self] in self?.reveal("shortcuts") }
+        }
     }
 
     /// Replace only Updates: a network result must not interrupt a shortcut
@@ -1776,6 +1781,14 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         // A chord another app holds keeps its note until it is changed.
         if let note = shortcutConflicts[identifier] {
             error.stringValue = note
+            // A long chord's note grows leftward under the title rather than
+            // truncating, keeping its right edge on the recorder's.
+            let needed = ceil(error.intrinsicContentSize.width)
+            if needed > width {
+                let grown = min(needed, layout.control.maxX - inset)
+                error.frame.origin.x = layout.control.maxX - grown
+                error.frame.size.width = grown
+            }
             error.setAccessibilityLabel("\(title) shortcut conflict")
             return layout.row.maxY + Self.shortcutErrorHeight
         }

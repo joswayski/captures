@@ -2255,7 +2255,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         })
         actions.willOpen = { [weak self] in self?.refreshShortcutConflicts(recheck: true, rebuildMenu: false) }
         // After the chosen item's action, never while AppKit still holds the menu.
-        actions.didClose = { DispatchQueue.main.async { [weak self] in self?.refreshStatusMenu() } }
+        actions.didClose = { [weak self] in DispatchQueue.main.async { self?.refreshStatusMenu() } }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button { configureStatusItemButton(button) }
         statusActions = actions
