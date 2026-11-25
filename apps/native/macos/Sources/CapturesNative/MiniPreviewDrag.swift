@@ -298,7 +298,9 @@ final class PreferenceDragStyleTile: PreferenceHoverButton {
         configure(label: label, role: .radioButton)
         demo.wantsLayer = true
         demo.layer?.cornerRadius = tokens.number("r-md") - 2
-        demo.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        // Previews always float on the fixed glass palette, so the demo's
+        // desktop is the same dark glass in either appearance.
+        demo.layer?.backgroundColor = tokens.color("glass-raised-solid").cgColor
         addSubview(demo)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

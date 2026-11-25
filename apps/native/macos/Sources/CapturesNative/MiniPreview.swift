@@ -1617,6 +1617,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
             imageView.layer?.removeAnimation(forKey: "frame")
             imageView.layer?.removeAnimation(forKey: "bounds")
             imageView.layer?.removeAnimation(forKey: "position")
+            // A fresh capture's accent ring has done its job once the card
+            // is dragged; left running it would outline the empty slot.
+            highlightRing.removeAnimation(forKey: "preview-capture-highlight")
         }
         alphaValue = CGFloat(p.opacity)
         updateTransform(scale: CGFloat(p.scale))

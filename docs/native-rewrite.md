@@ -6411,16 +6411,30 @@ unless reduced motion is enabled. Native completion resets consumed pointer
 state; X11 cancellation, disappearing targets and missing Finished have bounded
 cleanup. See `apps/native/wgpu/vendor/README.md` for provenance/update obligations.
 
-Like Tauri, both hosts conceal the source media while its native file drag is
-active, leaving a transparent media area with the card's chrome and shadow.
-AppKit retains concealment across stack rebuilds and restores the current survivor
-when the original source completes. A new card generation, even at the same ID
-and path, cannot inherit the old source's concealment or completion. The private-X11 drag probe checks composited
-desktop pixels, original-file transfer and source recovery in normal/reduced motion;
-AppKit has a rebuild/pixel regression. Physical platform acceptance remains open.
-Capture-highlight and editor-presence glows use exterior-only shadow masks, so
-they do not tint the concealed media area. The drag probe includes an open editor;
-AppKit's pixel regression also samples the transparent interior beside its ring.
+While a card's file is out, its slot plays the drag style chosen in
+Preferences (`mini_preview_drag_style`, shared `preview_drag_style`):
+Frosted imprint (default; the card's glass and chrome leave, the capture stays
+as a blurred half-strength imprint inside a hairline), Dock gap (the card lifts,
+leaves and its slot closes during the drag) or Quiet well (a recessed tile with
+the shared `drag-out` glyph). This replaces the Tauri-era transparent shell
+with its buttons, at the maintainer's request (November 2026). An accepted
+external drop keeps the card until its fade and slot close have played; older
+cards glide toward the anchored edge by `closing_shift`, so the rebuilt stack
+lands on the same positions with no snap, for top and bottom corners. Cancel,
+retain and reject return the card; reject still shakes. A mostly vertical press
+on an expanded stack of two or more carries the card up or down
+(`preview_drag_style::Reorder`) and commits `PreviewStack::move_card`; a
+horizontal press, a lone card, or a carry that leaves the stack starts the
+file drag. Preferences shows a looping demo tile per style (still under reduced
+motion, ticking only while visible). A new card generation, even at the same ID
+and path, cannot inherit an old source's drag pose or completion.
+
+| Host | Drag styles, reorder and Preferences picker (November 2026) |
+| --- | --- |
+| macOS | AppKit. XCTest on the maintainer's MacBook: each style's accepted drop at top and bottom corners (no frame moves the older card more than 0.6 of a slot), reorder in both orientations and its escape, style-only setting changes keep the panel; full suite 658 run, 0 failures. Real pointer drags into another app, the live demo loop and VoiceOver unverified |
+| Windows | Win32/Direct2D. Unit tests under Wine (positions after a closed slot for top and bottom stacks, outcome mapping, reorder commit, UIA radio group); Wine renders of each style, a top-stack slot close, a reorder and the Preferences row. Wine draws no Gaussian blur or layer opacity. Real OLE drags, mouse reorder and Narrator unverified |
+| X11 | GTK4. Unit tests (slot hand-off, closing offsets, reorder commit, Preferences save) and a live Xvfb + picom run: reorder, reorder escaping to a file drag, cancel, and an accepted drop that closed its slot and shrank the window keeping its bottom edge. Physical desktop and Orca unverified |
+| Wayland | GTK4 code path compiled (including layer-shell); the reorder hand-off through `gdk::Drag::begin` and the post-drop shrink were not run |
 
 | Host | Implementation | Verification / remaining acceptance |
 | --- | --- | --- |
