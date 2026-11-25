@@ -7554,9 +7554,13 @@ mod tests {
         );
         e.add_images(vec![png]);
         assert!(e.busy);
-        // The worker's first reply is the opened session.
-        let _opened = outcomes.recv().unwrap();
-        let outcome = outcomes.recv().unwrap();
+        // The worker's first reply is the opened session; the mini preview's
+        // thumbnail frames arrive between replies from their own thread.
+        let mut replies = outcomes
+            .iter()
+            .filter(|outcome| !matches!(outcome, Outcome::Thumbnail(_)));
+        let _opened = replies.next().unwrap();
+        let outcome = replies.next().unwrap();
         assert!(matches!(outcome, Outcome::Imported(..)));
         e.receive(outcome);
         assert_eq!(e.layer_count(), 2);
