@@ -3850,10 +3850,20 @@ impl State {
                 }
             }
             "p" => Gesture::Freehand(vec![point]),
-            tool => Gesture::Shape {
-                tool: tool.to_owned(),
-                start: point,
-                end: point,
+            // Shipping `hitTestSelectedShapeBody`: a shape tool moves the
+            // selected shape of its kind from its body (a line's or
+            // arrow's path) instead of drawing a new one.
+            tool => match self.shape_body_hit(tool, point) {
+                Some(id) => Gesture::Move {
+                    id,
+                    start: point,
+                    end: point,
+                },
+                None => Gesture::Shape {
+                    tool: tool.to_owned(),
+                    start: point,
+                    end: point,
+                },
             },
         };
         *self.gesture.borrow_mut() = Some(gesture);
@@ -4062,6 +4072,27 @@ impl State {
         Some((element.clone(), outline, hit))
     }
 
+    /// The selected shape under `tool`'s body hit test, if `point` is on it.
+    fn shape_body_hit(&self, tool: &str, point: Point) -> Option<String> {
+        let shape = match tool {
+            "a" => "arrow",
+            key if SHAPE_TOOLS.iter().any(|tool| tool.key == key) => key,
+            _ => return None,
+        };
+        let id = self.selected.borrow().clone()?;
+        let presented = self.presented.borrow();
+        let element = presented
+            .as_ref()?
+            .document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)?;
+        let radius = canvas_chrome::HIT_PX / 2. / self.display_scale();
+        captures_app::editor_canvas::selected_shape_body_hit(element, shape, point, radius)
+            .unwrap_or(false)
+            .then_some(id)
+    }
+
     /// The selected, unlocked line or arrow.
     fn selected_curve(&self) -> Option<captures_app::editor::ShapeElement> {
         let id = self.selected.borrow().clone()?;
@@ -4152,10 +4183,14 @@ impl State {
         if self.canvas.tooltip_text().as_deref() != hint.as_deref() {
             self.canvas.set_tooltip_text(hint.as_deref());
         }
+        let tool = self.tool.borrow().clone();
         match found {
             Some((element, Some(hit), _)) => self
                 .canvas
                 .set_cursor_from_name(Some(canvas_chrome::cursor(hit, element.base().rotation()))),
+            Some((_, None, point)) if self.shape_body_hit(&tool, point).is_some() => {
+                self.canvas.set_cursor_from_name(Some("move"));
+            }
             _ => self.sync_cursor(),
         }
     }

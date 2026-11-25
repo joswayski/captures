@@ -128,8 +128,14 @@ dragged over the canvas: the default guide, or the pointer over the image;
 or `export-maximum` with that size or quality (`export-compress` shows the before/after comparison,
 `export-compare-hidden` the same with it hidden), `export-menu` with the Save
 quality list open, `layer-menu` with the bottom layer's ⋯ card open, `rotate` with an in-memory image layer
-selected and its rotate handle showing, `trim` with that layer over a hidden background and Trim edges hovered, `expand` with it hanging past the canvas and its Expand canvas action, `expand-armed` with the action hovered, `text` with an in-memory label selected under Select and its quick format bar showing, `tip-undo`, `tip-rail`, `tip-grip`, `tip-save` or `export-tip` with that editor tooltip at rest (Undo, the first rail tool's label, the bottom layer's drag handle, the save folder, the size estimate); with `--tool b`, `erase` or `restore` picks that Eraser brush mode), and
-`--crop X,Y,W,H` with that crop staged. In Preferences, `--select color-picker` (or
+selected and its rotate handle showing, `trim` with that layer over a hidden background and Trim edges hovered, `expand` with it hanging past the canvas and its Expand canvas action, `expand-armed` with the action hovered, `text` with an in-memory label selected under Select and its quick format bar showing, `arrow`, `arrow-bent` or `rect` with an in-memory arrow (straight, or bent by one curve dot) or rectangle selected (pair with `--tool a` or `--tool rectangle` for its shape tool), `tip-undo`, `tip-rail`, `tip-grip`, `tip-save` or `export-tip` with that editor tooltip at rest (Undo, the first rail tool's label, the bottom layer's drag handle, the save folder, the size estimate); with `--tool b`, `erase` or `restore` picks that Eraser brush mode), and
+`--crop X,Y,W,H` with that crop staged. Like shipping, the selected layer
+keeps its grips under Select, Text or the shape tool that placed it: text,
+images and closed shapes resize from eight grips; a line or arrow (`src/editor/curve.rs`)
+has corner grips, square endpoint grips and curve dots (three starter dots while
+straight) that reshape it through the shared `editor_canvas` geometry, and a
+double-click adds a dot on its path or removes one; a shape tool moves the
+selected shape of its kind from its body. In Preferences, `--select color-picker` (or
 `color-picker-opaque`, the theme colors' one without opacity) draws Captures' custom-color
 picker (`src/color_picker.rs`) over the page. On other platforms the binary is a stub, so `cargo check` and
 `clippy` still run; cross-check with `--target x86_64-pc-windows-gnu`.

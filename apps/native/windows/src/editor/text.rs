@@ -20,6 +20,7 @@
 use std::cell::RefCell;
 
 use captures_app::editor::{Element, LayerEdit, Point, ResizeHandle, TextElement};
+use captures_app::editor_canvas;
 use captures_app::editor_session::{Request, TextCreate, TextInputTarget};
 use captures_app::editor_text::{self, InlineEditorLayout};
 use windows::Win32::Foundation::HWND;
@@ -1035,12 +1036,16 @@ impl Editor {
     // ---- grips ----
 
     /// The selected layer, when it shows resize grips: text, images and
-    /// closed shapes, unlocked, with Select or Text and no label open.
+    /// shapes, unlocked, with Select, Text or the shape tool that placed it
+    /// (shipping's `toolShowsTransformChrome`) and no label open.
     fn grip_layer(&self) -> Option<&Element> {
-        if self.inline.is_some() || !matches!(self.tool, "v" | "t") {
+        if self.inline.is_some() || !(self.tool == "t" || self.transform_tool()) {
             return None;
         }
-        if matches!(self.gesture, Some(Gesture::Move { .. })) {
+        if matches!(
+            self.gesture,
+            Some(Gesture::Move { .. } | Gesture::Curve { .. })
+        ) {
             return None;
         }
         let id = self.selected.as_ref()?;
@@ -1053,7 +1058,9 @@ impl Editor {
             .find(|e| e.base().id == *id)?;
         let resizable = match element {
             Element::Text(_) | Element::Image(_) => true,
-            Element::Shape(shape) => super::closed_kind(&shape.shape).is_some(),
+            Element::Shape(shape) => {
+                super::closed_kind(&shape.shape).is_some() || editor_canvas::is_curveable(shape)
+            }
             Element::Path(_) => false,
         };
         (resizable && !element.base().locked && element.base().visible).then_some(element)
@@ -1062,10 +1069,19 @@ impl Editor {
     /// The grip under a document point.
     pub(super) fn handle_at(&self, point: Point) -> Option<ResizeHandle> {
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
-        self.grip_layer()?
+        let layer = self.grip_layer()?;
+        let handle = layer
             .resize_handle_at(point, f64::from(GRIP + 3.) / scale)
             .ok()
-            .flatten()
+            .flatten()?;
+        // Lines and arrows have corner grips only; their edges belong to
+        // the curve dots.
+        (!is_curve(layer)
+            || matches!(
+                handle,
+                ResizeHandle::Nw | ResizeHandle::Ne | ResizeHandle::Se | ResizeHandle::Sw
+            ))
+        .then_some(handle)
     }
 
     /// Grip centres in well DIPs: corners and edge midpoints.
@@ -1082,6 +1098,9 @@ impl Editor {
             return Vec::new();
         }
         let mut points = corners.clone();
+        if self.grip_layer().is_some_and(is_curve) {
+            return points;
+        }
         for i in 0..4 {
             let (a, b) = (corners[i], corners[(i + 1) % 4]);
             points.push(((a.0 + b.0) / 2., (a.1 + b.1) / 2.));
@@ -1171,6 +1190,9 @@ impl Editor {
                 let lock = self.shift_down();
                 self.resize_request(&id, handle, end, lock)
             }
+            Some(Gesture::Curve {
+                id, handle, end, ..
+            }) => Self::curve_request(&id, handle, end),
             Some(Gesture::Rotate { .. }) => match self.rotate_request() {
                 Some(request) => request,
                 None => return,
@@ -1194,6 +1216,11 @@ impl Editor {
         self.preview_sent = Some(now);
         let _ = self.jobs.send(Job::Preview(request));
     }
+}
+
+/// A line or arrow, whose shape follows its curve dots.
+fn is_curve(element: &Element) -> bool {
+    matches!(element, Element::Shape(shape) if editor_canvas::is_curveable(shape))
 }
 
 /// A color as a comparable key.

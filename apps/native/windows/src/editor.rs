@@ -32,6 +32,7 @@ use captures_app::editor::{
     FreehandPathCreate, GuideOrientation, LayerEdit, OpenShapeCreate, OpenShapeKind, Point,
     Rect as DocRect, ResizeHandle,
 };
+use captures_app::editor_canvas::CurveHandle;
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, header};
 use captures_app::editor_export::{self, ExportSource, ExportTarget, SavePlan};
 use captures_app::editor_output::SavedExport;
@@ -65,6 +66,7 @@ use crate::{Options, appearance};
 mod background;
 mod canvas_hint;
 mod crop;
+mod curve;
 pub use crop::ASPECT_LABEL;
 mod compare;
 mod eraser;
@@ -569,6 +571,13 @@ enum Gesture {
     Resize {
         id: String,
         handle: ResizeHandle,
+        start: Point,
+        end: Point,
+    },
+    /// Dragging a selected line's or arrow's endpoint or curve dot.
+    Curve {
+        id: String,
+        handle: CurveHandle,
         start: Point,
         end: Point,
     },
@@ -2233,6 +2242,9 @@ impl Editor {
                     s.as_str(),
                     "layer-menu"
                         | "text"
+                        | "arrow"
+                        | "arrow-bent"
+                        | "rect"
                         | "rotate"
                         | "trim"
                         | "expand"
@@ -2638,7 +2650,8 @@ impl Editor {
                     Some(
                         Gesture::Resize { id, .. }
                         | Gesture::Move { id, .. }
-                        | Gesture::Rotate { id, .. },
+                        | Gesture::Rotate { id, .. }
+                        | Gesture::Curve { id, .. },
                     ) => Some(id.clone()),
                     _ => None,
                 };
@@ -2785,6 +2798,9 @@ impl Editor {
         let Some(point) = self.to_document(x, y) else {
             return;
         };
+        if double && self.edit_curve_at(point) {
+            return;
+        }
         // Shipping hit-tests the rotate grip before the resize grips.
         if let Some((id, outline, initial)) = self.rotate_hit(point) {
             self.gesture = Some(Gesture::Rotate {
@@ -2808,6 +2824,29 @@ impl Editor {
                 end: point,
             });
             self.preview_outline = None;
+            self.overlay_changed();
+            return;
+        }
+        // A line's or arrow's dots, after its corner grips.
+        if let Some((id, handle)) = self.curve_hit(point) {
+            self.gesture = Some(Gesture::Curve {
+                id,
+                handle,
+                start: point,
+                end: point,
+            });
+            self.preview_outline = None;
+            self.overlay_changed();
+            return;
+        }
+        if let Some(id) = self.shape_body_hit(point) {
+            self.gesture = Some(Gesture::Move {
+                id,
+                start: point,
+                end: point,
+            });
+            self.preview_outline = None;
+            self.guides.clear();
             self.overlay_changed();
             return;
         }
@@ -2903,7 +2942,11 @@ impl Editor {
                     self.preview_gesture();
                 }
             }
-            Some(Gesture::Resize { end, .. } | Gesture::Rotate { end, .. }) => {
+            Some(
+                Gesture::Resize { end, .. }
+                | Gesture::Rotate { end, .. }
+                | Gesture::Curve { end, .. },
+            ) => {
                 if let Some(point) = point {
                     *end = point;
                 }
@@ -2939,9 +2982,10 @@ impl Editor {
             return;
         };
         let transformed = match &gesture {
-            Gesture::Resize { id, .. } | Gesture::Move { id, .. } | Gesture::Rotate { id, .. } => {
-                Some(id.clone())
-            }
+            Gesture::Resize { id, .. }
+            | Gesture::Move { id, .. }
+            | Gesture::Rotate { id, .. }
+            | Gesture::Curve { id, .. } => Some(id.clone()),
             _ => None,
         };
         self.guides.clear();
@@ -2970,6 +3014,21 @@ impl Editor {
                 if moved(start, end) {
                     Some(self.resize_request(&id, handle, end, lock))
                 } else {
+                    None
+                }
+            }
+            Gesture::Curve {
+                id,
+                handle,
+                start,
+                end,
+            } => {
+                if moved(start, end) {
+                    Some(Self::curve_request(&id, handle, end))
+                } else {
+                    if self.preview_outline.take().is_some() {
+                        let _ = self.jobs.send(Job::Refresh);
+                    }
                     None
                 }
             }
@@ -3061,6 +3120,7 @@ impl Editor {
             gesture,
             Gesture::Resize { .. }
                 | Gesture::Rotate { .. }
+                | Gesture::Curve { .. }
                 | Gesture::Brush(_)
                 | Gesture::Move { .. }
         ) {
@@ -4498,7 +4558,12 @@ impl Editor {
     fn selection_outline(&self) -> Option<[Point; 4]> {
         if matches!(
             self.gesture,
-            Some(Gesture::Resize { .. } | Gesture::Move { .. } | Gesture::Rotate { .. })
+            Some(
+                Gesture::Resize { .. }
+                    | Gesture::Move { .. }
+                    | Gesture::Rotate { .. }
+                    | Gesture::Curve { .. }
+            )
         ) && let Some(outline) = self.preview_outline
         {
             return Some(outline);
@@ -4583,6 +4648,7 @@ impl Editor {
         }
         self.draw_crop(dc)?;
         self.draw_grips(dc)?;
+        self.draw_curve_handles(dc)?;
         self.draw_rotate_handle(dc)?;
         self.draw_brush_ring(dc)?;
         self.draw_text(dc)?;
@@ -6177,6 +6243,26 @@ impl Editor {
                         {
                             IDC_HAND
                         }
+                        None if self.l.well.contains(x, y)
+                            && let Some((_, handle)) =
+                                self.to_document(x, y).and_then(|p| self.curve_hit(p))
+                            && self
+                                .to_document(x, y)
+                                .and_then(|p| self.handle_at(p))
+                                .is_none() =>
+                        {
+                            match handle {
+                                CurveHandle::Start | CurveHandle::End => IDC_SIZEALL,
+                                _ => IDC_HAND,
+                            }
+                        }
+                        None if self.l.well.contains(x, y)
+                            && self.to_document(x, y).is_some_and(|p| {
+                                self.handle_at(p).is_none() && self.shape_body_hit(p).is_some()
+                            }) =>
+                        {
+                            IDC_SIZEALL
+                        }
                         None if self.l.well.contains(x, y) => {
                             match self.to_document(x, y).and_then(|p| self.handle_at(p)) {
                                 Some(ResizeHandle::N | ResizeHandle::S) => IDC_SIZENS,
@@ -6995,6 +7081,65 @@ pub fn render_offscreen(
     } else {
         None
     };
+    // `--select arrow`: an arrow placed in memory and selected, with its
+    // corner grips and starter dots (`arrow-bent`: bent by one curve dot);
+    // `rect`: a rectangle with its eight grips. Pair with the shape's
+    // `--tool` to show them under the tool that placed it.
+    let shape = match select {
+        Some(kind @ ("arrow" | "arrow-bent" | "rect")) => {
+            let snapshot = session.snapshot();
+            let (w, h) = (snapshot.document.width, snapshot.document.height);
+            let start = Point {
+                x: w * 0.25,
+                y: h * 0.65,
+            };
+            let end = Point {
+                x: w * 0.7,
+                y: h * 0.3,
+            };
+            let style = snapshot.initial_annotation_style.clone();
+            let request = if kind == "rect" {
+                Request::CreateClosedShape {
+                    create: ClosedShapeCreate {
+                        shape: ClosedShapeKind::Rectangle,
+                        start,
+                        end,
+                        style,
+                        opacity: 100.,
+                    },
+                }
+            } else {
+                Request::CreateOpenShape {
+                    create: OpenShapeCreate {
+                        shape: OpenShapeKind::Arrow,
+                        start,
+                        end,
+                        style,
+                        opacity: 100.,
+                    },
+                }
+            };
+            session.execute(request).map_err(fail)?;
+            let layer = session
+                .snapshot()
+                .document
+                .elements
+                .last()
+                .map(|e| e.base().id.clone());
+            if let (Some(layer), "arrow-bent") = (&layer, kind) {
+                session
+                    .execute(Request::Layer {
+                        id: layer.clone(),
+                        edit: LayerEdit::Curve {
+                            edit: captures_app::editor_canvas::CurveEdit::Bend { bend: 0.35 },
+                        },
+                    })
+                    .map_err(fail)?;
+            }
+            layer
+        }
+        _ => None,
+    };
     let presented = present(&mut session, &id, &mut Published::default());
     let mode = entry.mode.unwrap_or(CaptureMode::Region);
     let mut editor = Editor::new(
@@ -7010,7 +7155,11 @@ pub fn render_offscreen(
     editor.w = w;
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
-    if let Some(layer) = placed.filter(|_| select != Some("trim")).or(label) {
+    if let Some(layer) = placed
+        .filter(|_| select != Some("trim"))
+        .or(label)
+        .or(shape)
+    {
         editor.set_selected(Some(layer));
     }
     // `--select export`: the Export settings panel open, with the
@@ -7891,6 +8040,117 @@ mod tests {
         let background = e.layer(1).unwrap().id.clone();
         e.set_selected(Some(background));
         assert!(e.rotate_grip().is_none());
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+    /// The shape a shape tool just placed keeps its grips: an arrow's
+    /// corners and curve dots under the Arrow tool (a starter dot dragged
+    /// off the chord commits `CurveEdit::Move`), and a rectangle's eight
+    /// grips under the Rectangle tool, whose body press moves it.
+    #[test]
+    fn shape_tools_keep_grips_and_curve_dots() {
+        use captures_app::editor_canvas::CurveEdit;
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-curve-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let open = |select: &str, tool: &str| {
+            let profile = data.to_string_lossy().into_owned();
+            let args = [
+                "test",
+                "--profile",
+                &profile,
+                "--scene",
+                "editor",
+                "--artifact",
+                &capture.entry.id,
+                "--select",
+                select,
+                "--tool",
+                tool,
+            ];
+            let options = crate::parse(args.into_iter().map(str::to_owned)).unwrap();
+            let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+            render_offscreen(
+                &options,
+                Gfx::new(&tokens, false).unwrap(),
+                tokens,
+                (1280., 840.),
+            )
+            .unwrap()
+        };
+        let client = |e: &Editor, p: Point| {
+            let (x, y) = e.to_well(p).unwrap();
+            let (x, y) = (
+                ((x + e.l.well.x) * e.scale).round() as u32,
+                ((y + e.l.well.y) * e.scale).round() as u32,
+            );
+            LPARAM((x | (y << 16)) as isize)
+        };
+
+        let mut e = open("arrow", "a");
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        assert_eq!(e.tool, "a");
+        let id = e.selected.clone().expect("the placed arrow");
+        // Corner grips only: a line's edges belong to its dots.
+        assert_eq!(e.grips().len(), 4);
+        let Some(captures_app::editor::Element::Shape(arrow)) = e
+            .presented
+            .as_ref()
+            .and_then(|p| p.document.elements.iter().find(|el| el.base().id == id))
+            .cloned()
+        else {
+            panic!("an arrow");
+        };
+        let middle = captures_app::editor_canvas::starter_controls(&arrow)[1];
+        assert!(matches!(
+            e.curve_hit(middle),
+            Some((_, CurveHandle::StarterControl { index: 1 }))
+        ));
+        e.handle(WM_LBUTTONDOWN, WPARAM(0), client(&e, middle));
+        assert!(matches!(e.gesture, Some(Gesture::Curve { .. })));
+        let bent = Point {
+            x: middle.x + 20.,
+            y: middle.y + 60.,
+        };
+        e.handle(WM_MOUSEMOVE, WPARAM(0), client(&e, bent));
+        e.handle(WM_LBUTTONUP, WPARAM(0), client(&e, bent));
+        assert!(e.gesture.is_none());
+        let moves: Vec<_> = inbox
+            .try_iter()
+            .filter_map(|job| match job {
+                Job::Apply(Request::Layer {
+                    id: layer,
+                    edit:
+                        LayerEdit::Curve {
+                            edit: CurveEdit::Move { handle, .. },
+                        },
+                }) if layer == id => Some(handle),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moves, [CurveHandle::StarterControl { index: 1 }]);
+        drop(e);
+
+        let mut e = open("rect", "rectangle");
+        let (jobs, _inbox) = channel();
+        e.jobs = jobs;
+        assert_eq!(e.tool, "rectangle");
+        assert_eq!(e.grips().len(), 8);
+        let outline = e.selection_outline().unwrap();
+        let centre = Point {
+            x: (outline[0].x + outline[2].x) / 2.,
+            y: (outline[0].y + outline[2].y) / 2.,
+        };
+        e.handle(WM_LBUTTONDOWN, WPARAM(0), client(&e, centre));
+        assert!(matches!(e.gesture, Some(Gesture::Move { .. })));
         drop(e);
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };
