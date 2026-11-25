@@ -1028,7 +1028,8 @@ final class UpdateNoticeView: NSView {
             ShippingIcons.stroke("release-link", in: NSRect(x: gap, y: 0, width: side, height: side), width: 2)
             return true
         }
-        let y = raised ? font.capHeight - side + 1 : (font.capHeight - side) / 2
+        // Raised: the top clears the cap height, as GTK and Win32 sit it at the line's top.
+        let y = raised ? font.capHeight - side * 0.6 : (font.capHeight - side) / 2
         attachment.bounds = NSRect(x: 0, y: y, width: gap + side, height: side)
         return NSAttributedString(attachment: attachment)
     }
