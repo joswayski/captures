@@ -6495,17 +6495,18 @@ mod tests {
         // Arrows step and wrap; activating saves the persisted value.
         assert_eq!(scene.choice_step(false), Some(Target::DragStyle(2)));
         assert_eq!(scene.choice_step(true), Some(Target::DragStyle(1)));
-        scene.activate(Target::DragStyle(1));
-        assert_eq!(scene.drag_style_index(), 1);
+        // Dock gap is already selected, so pick Frosted imprint.
+        scene.activate(Target::DragStyle(0));
+        assert_eq!(scene.drag_style_index(), 0);
         assert!(
             scene
                 .events
-                .contains(&Event::Selected(Target::DragStyle(1)))
+                .contains(&Event::Selected(Target::DragStyle(0)))
         );
         let saved = captures_settings::load(&file).unwrap();
         assert_eq!(
             saved.mini_preview_drag_style,
-            captures_settings::MiniPreviewDragStyle::Dock
+            captures_settings::MiniPreviewDragStyle::Frosted
         );
         // Type-ahead jumps to the style it names.
         scene.set_focus(Some(Target::DragStyle(1)), true);
@@ -6534,8 +6535,8 @@ mod tests {
         assert_eq!(scene.hit(cx, cy), None);
         assert_eq!(scene.focus, None);
         assert!(!scene.demos_animating());
-        assert!(scene.activate(Target::DragStyle(0)).is_none());
-        assert_eq!(scene.drag_style_index(), 1);
+        assert!(scene.activate(Target::DragStyle(1)).is_none());
+        assert_eq!(scene.drag_style_index(), 0);
         let _ = std::fs::remove_file(&file);
     }
 
