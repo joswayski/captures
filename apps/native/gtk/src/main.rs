@@ -39,7 +39,7 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--update-card idle|checking|current|available|closing|manual|downloading|verifying|restarting|failed|check-failed]\n\
   [--update-live available|closing|manual|downloading|verifying|installing|failed|check-failed] [--update-script available|retry]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
-  [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
+  [--screenshot OUT.png] [--find QUERY] [--count N] [--drag frosted|dock|well|dock-close|close|reorder] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
   --live [--captures-autostart] [--capture display|region|window|new|record-display|record-region|record-window] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]\n\
   --live --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (update relaunches only)\n\
@@ -121,7 +121,12 @@ struct Options {
     /// `--native-update-ready-file` and `--native-update-ready-token` from
     /// the update helper, or the startup recovery companion's own file.
     health: Option<captures_app::updater::HealthAcknowledgement>,
+    /// `--drag KIND`: `--scene preview` held in one frame of a drag.
+    drag: Option<String>,
 }
+
+/// `--drag` kinds (`previews::Previews::drag_fixture`).
+const DRAG_FIXTURES: [&str; 6] = ["frosted", "dock", "well", "dock-close", "close", "reorder"];
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     parse_args(args, captures_app::preview_channel::version().is_some())
@@ -155,6 +160,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
         update_live: None,
         update_script: None,
         health: None,
+        drag: None,
     };
     let (mut ready_file, mut ready_token) = (None, None);
     let mut args = args.skip(1);
@@ -257,6 +263,13 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
             // Everything after `--` is a local path (Open With).
             "--" => options.open.extend(args.by_ref().map(PathBuf::from)),
             "--count" => options.count = value()?.parse().map_err(|_| "bad --count")?,
+            "--drag" => {
+                let kind = value()?;
+                if !DRAG_FIXTURES.contains(&kind.as_str()) {
+                    return Err(format!("unknown --drag {kind}"));
+                }
+                options.drag = Some(kind);
+            }
             "--exercise" => options.exercise = true,
             "--quit-after" => {
                 let seconds: f64 = value()?.parse().map_err(|_| "bad --quit-after")?;
@@ -311,6 +324,9 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
     }
     if options.update_card.is_some() && (options.live || options.scene != Scene::Preferences) {
         return Err("--update-card renders the Preferences fixture only".into());
+    }
+    if options.drag.is_some() && (options.live || options.scene != Scene::Preview) {
+        return Err("--drag renders --scene preview only".into());
     }
     if options.update_live.is_some() && (options.live || options.scene != Scene::Update) {
         return Err("--update-live renders --scene update only".into());
@@ -1233,7 +1249,16 @@ fn main() -> glib::ExitCode {
                     shown = Some(host.show_preview(entry));
                 }
                 match shown {
-                    Some(previews) => previews.window.clone(),
+                    Some(previews) => {
+                        // Once the cards have arrived and laid out.
+                        if let Some(kind) = options.drag.clone() {
+                            let held = previews.clone();
+                            glib::timeout_add_local_once(Duration::from_millis(700), move || {
+                                held.drag_fixture(&kind);
+                            });
+                        }
+                        previews.window.clone()
+                    }
                     None => {
                         eprintln!("no History entries to preview");
                         app.quit();
@@ -1468,5 +1493,13 @@ mod tests {
         assert!(parse(false, &["--update-card", "nope"]).is_err());
         assert!(parse(false, &["--scene", "history", "--update-card", "idle"]).is_err());
         assert!(parse(false, &["--live", "--update-card", "idle"]).is_err());
+    }
+
+    #[test]
+    fn drag_fixtures_render_only_the_preview_stack() {
+        let drag = parse(false, &["--scene", "preview", "--drag", "dock-close"]).unwrap();
+        assert_eq!(drag.drag.as_deref(), Some("dock-close"));
+        assert!(parse(false, &["--scene", "preview", "--drag", "nope"]).is_err());
+        assert!(parse(false, &["--scene", "history", "--drag", "well"]).is_err());
     }
 }

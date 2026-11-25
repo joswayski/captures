@@ -3,7 +3,9 @@
 //! `styles/mini-preview.css`: a cover thumbnail with its size chip, and on
 //! hover or keyboard focus a dimmed, blurred image under Close, Delete, Edit,
 //! Copy and Save file (Show in Folder once saved). Membership and copy come
-//! from `captures_app::preview`; only the hovered card redraws.
+//! from `captures_app::preview`; only the hovered card redraws. A card's
+//! image drags its file out, its slot posed in the chosen
+//! `preview_drag_style`; a mostly vertical drag reorders the stack.
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -11,6 +13,7 @@ use std::time::Duration;
 
 use captures_app::preview::{self, PreviewDropLanding, PreviewStack};
 use captures_app::preview_chrome::{self, EditorPresence};
+use captures_app::preview_drag_style::{self as drag_style, DragEnd, DragStyle, PressIntent};
 use captures_app::preview_motion::ExitKind;
 use captures_history::HistoryEntry;
 use gtk::prelude::*;
@@ -21,7 +24,8 @@ use crate::tokens::Tokens;
 use crate::widgets::{Icon, Thumbnail, icon_button};
 
 mod pile;
-use pile::{Pile, PileCard};
+pub(crate) use pile::draw_imprint;
+use pile::{Imprint, Pile, PileCard};
 #[cfg(feature = "layer-shell")]
 pub(crate) mod layer_shell;
 #[cfg(feature = "x11")]
@@ -70,6 +74,11 @@ struct Card {
     hover_unlocked: Cell<bool>,
     /// Playing its exit: the look stays as it was when the exit began.
     exiting: Cell<bool>,
+    /// Its file is out of the stack until the drag's end has played.
+    held: Cell<bool>,
+    /// A card is carried within the stack: no card shows hover chrome.
+    quiet: Rc<Cell<bool>>,
+    imprint: Imprint,
 }
 
 struct State {
@@ -98,6 +107,12 @@ struct State {
     /// The window is a wlr-layer-shell surface (wlroots, KDE).
     #[cfg(feature = "layer-shell")]
     layered: bool,
+    /// For each card's drag imprint (the fixed glass palette).
+    tokens: Tokens,
+    /// Shared with every card: a reorder is running.
+    quiet: Rc<Cell<bool>>,
+    /// A file drag a reorder handed off, kept alive until it ends.
+    handed_off: RefCell<Option<gdk::Drag>>,
 }
 
 fn icon_control(icon: &str, label: &str, classes: &[&str]) -> gtk::Button {
@@ -171,10 +186,42 @@ pub fn build(
         placer: x11::Placer::new(&gtk::prelude::WidgetExt::display(&window)).map(Rc::new),
         #[cfg(feature = "layer-shell")]
         layered,
+        tokens: tokens.clone(),
+        quiet: Rc::default(),
+        handed_off: RefCell::default(),
     });
     #[cfg(feature = "x11")]
     place_on_x11(&state);
     carry_pile(&state);
+    reorder_cards(&state);
+    let weak = Rc::downgrade(&state);
+    pile.connect_dropped(move |id| {
+        if let Some(state) = weak.upgrade() {
+            // The slot has closed: the card leaves without a streak, and
+            // the stack shrinks in this frame with nothing moving.
+            state.leave(id, None);
+        }
+    });
+    let weak = Rc::downgrade(&state);
+    pile.connect_returned(move |id| {
+        if let Some(state) = weak.upgrade()
+            && let Some(card) = state.card_by_id(id)
+        {
+            card.held.set(false);
+            card.refresh();
+        }
+    });
+    let weak = Rc::downgrade(&state);
+    pile.connect_reordered(move |id, to| {
+        if let Some(state) = weak.upgrade() {
+            state.stack.borrow_mut().move_card(id, to);
+            state.quiet.set(false);
+            for card in state.cards.borrow().iter() {
+                card.held.set(false);
+                card.refresh();
+            }
+        }
+    });
     let weak = Rc::downgrade(&state);
     clear.connect_clicked(move |_| {
         if let Some(state) = weak.upgrade() {
@@ -333,6 +380,104 @@ fn carry_pile(state: &Rc<State>) {
     state.pile.expand_button().add_controller(drag);
 }
 
+/// A press on a card, until the pile's gesture knows what it is.
+struct Press {
+    card: Rc<Card>,
+    /// Where it landed in the pile and in the card.
+    at: (f64, f64),
+    in_card: (f64, f64),
+    reordering: bool,
+    /// Decided: a reorder, or left to the card's file drag.
+    decided: bool,
+}
+
+/// Reordering: a mostly vertical press on a card of an expanded stack
+/// carries it up or down (`preview_drag_style::press_intent`); a mostly
+/// horizontal one, or any press on a lone card, is left to the card's own
+/// `DragSource`, which drags the file out as before. The gesture sits on
+/// the pile, which never moves, in the capture phase, so it decides at
+/// `REORDER_THRESHOLD` before the drag source's larger threshold; only a
+/// reorder claims the press, which denies the drag source and any button's
+/// click. A carried pointer that leaves the column (`reorder_escapes`) gives
+/// the reorder up (everything glides home) and the same press becomes the
+/// file drag through `gdk::Drag::begin`.
+fn reorder_cards(state: &Rc<State>) {
+    let drag = gtk::GestureDrag::new();
+    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let press = Rc::new(RefCell::new(None::<Press>));
+    let (weak, held) = (Rc::downgrade(state), press.clone());
+    drag.connect_drag_begin(move |_, x, y| {
+        let Some(state) = weak.upgrade() else { return };
+        *held.borrow_mut() = state.card_at(x, y).and_then(|card| {
+            let point = state
+                .pile
+                .compute_point(&card.root, &graphene::Point::new(x as f32, y as f32))?;
+            Some(Press {
+                card,
+                at: (x, y),
+                in_card: (f64::from(point.x()), f64::from(point.y())),
+                reordering: false,
+                decided: false,
+            })
+        });
+    });
+    let (weak, held) = (Rc::downgrade(state), press.clone());
+    drag.connect_drag_update(move |gesture, dx, dy| {
+        let Some(state) = weak.upgrade() else { return };
+        let mut press = held.borrow_mut();
+        let Some(current) = press.as_mut() else {
+            return;
+        };
+        if !current.decided {
+            let count = state.stack.borrow().ids().len();
+            match drag_style::press_intent(dx, dy, count) {
+                None => return,
+                Some(PressIntent::Reorder) if state.pile.reorder_begin(&current.card.entry.id) => {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    current.reordering = true;
+                    current.card.held.set(true);
+                    state.quiet.set(true);
+                    for card in state.cards.borrow().iter() {
+                        card.refresh();
+                    }
+                }
+                Some(_) => {}
+            }
+            current.decided = true;
+        }
+        if !current.reordering {
+            return;
+        }
+        state.pile.reorder_pointer(dy);
+        let (x, y) = (current.at.0 + dx, current.at.1 + dy);
+        if state.pile.reorder_escapes(x, y) {
+            current.reordering = false;
+            state.pile.reorder_cancel();
+            let (card, hot) = (current.card.clone(), current.in_card);
+            drop(press);
+            state.hand_off(gesture, &card, hot, (dx, dy));
+        }
+    });
+    let weak = Rc::downgrade(state);
+    drag.connect_drag_end(move |_, _, _| {
+        if let (Some(state), Some(press)) = (weak.upgrade(), press.take())
+            && press.reordering
+        {
+            state.pile.reorder_drop();
+        }
+    });
+    state.pile.add_controller(drag);
+}
+
+/// The card's file as a drag's `text/uri-list`.
+fn file_content(path: &std::path::Path) -> gdk::ContentProvider {
+    let uri = gio::File::for_path(path).uri();
+    gdk::ContentProvider::for_bytes(
+        "text/uri-list",
+        &glib::Bytes::from_owned(format!("{uri}\r\n").into_bytes()),
+    )
+}
+
 impl Previews {
     /// History's Restore: add `entry` as the newest card, or show it again.
     pub fn restore(&self, entry: HistoryEntry) {
@@ -402,9 +547,170 @@ impl Previews {
     pub fn sync_editing(&self) {
         self.state.sync_editing();
     }
+
+    /// `--drag KIND`: hold the stack in one frame of a drag for offscreen
+    /// renders. `frosted`, `dock` and `well` show the middle card's file
+    /// out of the stack in that style, `dock-close` the dock's slot halfway
+    /// closed, `close` a frosted drop closing its slot (toward the stack's
+    /// anchored edge), and `reorder` the oldest card carried one slot on.
+    pub fn drag_fixture(&self, kind: &str) {
+        let state = &self.state;
+        let ids = state.stack.borrow().ids().to_vec();
+        let pile = &state.pile;
+        if kind == "reorder" {
+            let down = if pile.is_top_anchor() { -1. } else { 1. };
+            state.quiet.set(true);
+            for card in state.cards.borrow().iter() {
+                card.refresh();
+            }
+            pile.reorder_fixture(0, down * 1.45 * drag_style::SLOT_PITCH, 400.);
+            return;
+        }
+        let Some(card) = ids.get(ids.len() / 2).and_then(|id| state.card_by_id(id)) else {
+            return;
+        };
+        let (style, at) = match kind {
+            "frosted" => (DragStyle::Frosted, 1_000.),
+            "dock" => (DragStyle::Dock, 1_000.),
+            "well" => (DragStyle::Well, 1_000.),
+            "dock-close" => (DragStyle::Dock, 210.),
+            _ => (DragStyle::Frosted, 1_000.),
+        };
+        pile.set_drag_clock(Some(0.));
+        card.held.set(true);
+        card.refresh();
+        pile.drag_out_begin(&card.entry.id, style, false);
+        pile.set_drag_clock(Some(at));
+        if kind == "close" {
+            pile.drag_out_end(&card.entry.id, DragEnd::Dropped);
+            pile.set_drag_clock(Some(at + 140. + 120.));
+        }
+    }
 }
 
 impl State {
+    fn card_by_id(&self, id: &str) -> Option<Rc<Card>> {
+        self.cards
+            .borrow()
+            .iter()
+            .find(|card| card.entry.id == id)
+            .cloned()
+    }
+
+    /// The live card under `(x, y)` in the pile, if the stack is expanded.
+    fn card_at(&self, x: f64, y: f64) -> Option<Rc<Card>> {
+        if self.stack.borrow().is_collapsed() {
+            return None;
+        }
+        let mut widget = self.pile.pick(x, y, gtk::PickFlags::DEFAULT);
+        while let Some(current) = widget {
+            if let Some(card) = self
+                .cards
+                .borrow()
+                .iter()
+                .find(|card| card.root.upcast_ref::<gtk::Widget>() == &current)
+            {
+                return Some(card.clone());
+            }
+            widget = current.parent();
+        }
+        None
+    }
+
+    /// A card's file left the stack: its slot shows the drag style from
+    /// the settings saved now, so a Preferences change applies to the
+    /// next drag.
+    fn file_drag_began(&self, card: &Rc<Card>) {
+        crate::live::file_drag(true);
+        self.self_drop.set(false);
+        let style = captures_settings::load(&self.settings_file)
+            .unwrap_or_default()
+            .mini_preview_drag_style;
+        let hovered = card.root.has_css_class("hover");
+        // The arrival ring is one-shot: the imprint would restart it.
+        card.root.remove_css_class("capture-highlight");
+        card.held.set(true);
+        card.refresh();
+        self.pile.drag_out_begin(&card.entry.id, style, hovered);
+    }
+
+    /// An accepted copy elsewhere lets the card go once its slot has
+    /// closed; anything else brings it back, and a drop on the stack itself
+    /// also shakes it.
+    fn file_drag_ended(&self, card: &Rc<Card>, accepted: bool) {
+        crate::live::file_drag(false);
+        let landing = if self.self_drop.replace(false) {
+            PreviewDropLanding::PreviewStack
+        } else {
+            PreviewDropLanding::External
+        };
+        let id = &card.entry.id;
+        let outcome = preview::preview_drag_outcome(accepted, landing);
+        let end = if outcome == preview::PreviewDragOutcome::Dismiss {
+            DragEnd::Dropped
+        } else {
+            DragEnd::Returned
+        };
+        // A collapsed pile shows no drag: the outcome applies at once.
+        if !self.pile.drag_out_end(id, end) {
+            if end == DragEnd::Dropped {
+                self.leave(id, None);
+                return;
+            }
+            card.held.set(false);
+            card.refresh();
+        }
+        if outcome == preview::PreviewDragOutcome::Reject {
+            self.pile.reject(id);
+        }
+    }
+
+    /// A reorder escaped the column: start the file drag from the same
+    /// press, as the card's `DragSource` would have.
+    fn hand_off(
+        self: &Rc<Self>,
+        gesture: &gtk::GestureDrag,
+        card: &Rc<Card>,
+        (hot_x, hot_y): (f64, f64),
+        (dx, dy): (f64, f64),
+    ) {
+        let (Some(surface), Some(device)) = (self.window.surface(), gesture.device()) else {
+            return;
+        };
+        let content = file_content(&media_path(&self.history_root, &card.entry));
+        // GTK's own drag source passes the pointer's offset from the press.
+        let Some(drag) =
+            gdk::Drag::begin(&surface, &device, &content, gdk::DragAction::COPY, dx, dy)
+        else {
+            return;
+        };
+        let still = gtk::WidgetPaintable::new(Some(&card.image)).current_image();
+        gtk::DragIcon::set_from_paintable(&drag, &still, hot_x as i32, hot_y as i32);
+        self.file_drag_began(card);
+        let done = Rc::new(Cell::new(false));
+        let (weak, weak_card, ended) = (Rc::downgrade(self), Rc::downgrade(card), done.clone());
+        drag.connect_dnd_finished(move |drag| {
+            if !ended.replace(true) {
+                drag.drop_done(true);
+                if let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) {
+                    state.handed_off.borrow_mut().take();
+                    state.file_drag_ended(&card, true);
+                }
+            }
+        });
+        let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(card));
+        drag.connect_cancel(move |drag, _| {
+            if !done.replace(true) {
+                drag.drop_done(false);
+                if let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) {
+                    state.handed_off.borrow_mut().take();
+                    state.file_drag_ended(&card, false);
+                }
+            }
+        });
+        *self.handed_off.borrow_mut() = Some(drag);
+    }
+
     fn restore(self: &Rc<Self>, entry: HistoryEntry) {
         if self.stack.borrow_mut().insert(entry.id.clone()) {
             let card = self.card(entry);
@@ -413,6 +719,7 @@ impl State {
                 root: card.root.clone().upcast(),
                 dim: card.dim.clone().upcast(),
                 image: card.image.clone(),
+                imprint: card.imprint.clone(),
             });
             self.cards.borrow_mut().push(card);
         }
@@ -757,6 +1064,9 @@ impl State {
         dim.set_can_target(false);
         dim.set_opacity(0.);
         root.add_overlay(&dim);
+        // What a file drag leaves in the slot, under the chrome.
+        let imprint = Imprint::new(&self.tokens);
+        root.add_overlay(&imprint.area);
 
         // `.thumbnail-bottom-bar`: size chip and the clipboard status chip.
         let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -834,6 +1144,9 @@ impl State {
             lock_origin: Cell::new(None),
             hover_unlocked: Cell::new(false),
             exiting: Cell::new(false),
+            held: Cell::new(false),
+            quiet: self.quiet.clone(),
+            imprint,
         });
         card.refresh();
         self.load_thumbnail(&card);
@@ -896,9 +1209,11 @@ impl State {
         });
         card.root.add_controller(focus);
 
-        // File drag out, as History's cards. The card's image hides under a
-        // still copy of it (`thumbnail-file-dragging`); an accepted copy
-        // elsewhere dismisses the card, a drop back on the stack shakes it.
+        // File drag out, as History's cards: the card's slot shows the
+        // chosen drag style (`preview_drag_style`) until the drag ends; an
+        // accepted copy elsewhere lets the card go once its slot has
+        // closed, a drop back on the stack shakes it. A mostly vertical
+        // press is a reorder instead (`reorder_cards`), which denies this.
         let drag = gtk::DragSource::new();
         drag.set_actions(gdk::DragAction::COPY);
         let path = media_path(&self.history_root, &card.entry);
@@ -906,23 +1221,18 @@ impl State {
         let at = grab.clone();
         drag.connect_prepare(move |_, x, y| {
             at.set((x, y));
-            let uri = gio::File::for_path(&path).uri();
-            Some(gdk::ContentProvider::for_bytes(
-                "text/uri-list",
-                &glib::Bytes::from_owned(format!("{uri}\r\n").into_bytes()),
-            ))
+            Some(file_content(&path))
         });
         let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
         drag.connect_drag_begin(move |source, _| {
-            crate::live::file_drag(true);
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
+                crate::live::file_drag(true);
                 return;
             };
-            state.self_drop.set(false);
             let still = gtk::WidgetPaintable::new(Some(&card.image)).current_image();
             let (x, y) = grab.get();
             source.set_icon(Some(&still), x as i32, y as i32);
-            card.root.add_css_class("file-dragging");
+            state.file_drag_began(&card);
         });
         let cancelled = Rc::new(Cell::new(false));
         let flag = cancelled.clone();
@@ -932,22 +1242,12 @@ impl State {
         });
         let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
         drag.connect_drag_end(move |_, _, _| {
-            crate::live::file_drag(false);
             let accepted = !cancelled.replace(false);
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
+                crate::live::file_drag(false);
                 return;
             };
-            card.root.remove_css_class("file-dragging");
-            let landing = if state.self_drop.replace(false) {
-                PreviewDropLanding::PreviewStack
-            } else {
-                PreviewDropLanding::External
-            };
-            match preview::preview_drag_outcome(accepted, landing) {
-                preview::PreviewDragOutcome::Reject => state.pile.reject(&card.entry.id),
-                preview::PreviewDragOutcome::Dismiss => state.leave(&card.entry.id, None),
-                preview::PreviewDragOutcome::Retain => {}
-            }
+            state.file_drag_ended(&card, accepted);
         });
         card.image.add_controller(drag);
 
@@ -1279,7 +1579,11 @@ impl Card {
             .root()
             .and_downcast::<gtk::Window>()
             .is_some_and(|window| window.gets_focus_visible());
-        let active = self.hovered.get() || (self.focused.get() && keyboard);
+        // A card whose file is out, or any card while one is carried,
+        // shows no hover chrome.
+        let active = !self.held.get()
+            && !self.quiet.get()
+            && (self.hovered.get() || (self.focused.get() && keyboard));
         if active {
             self.root.add_css_class("hover");
         } else {

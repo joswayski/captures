@@ -19,7 +19,9 @@ frame and exit, for parity comparisons. `--scene history --history-root DIR`
 opens Capture History, and `--scene editor --artifact ID --history-root DIR`
 opens the screenshot editor on one History entry, `--scene recording
 --artifact ID` opens the recording editor on a video or GIF, and `--scene preview`
-restores the two newest entries (`--count N` for more, or `--artifact ID`) as floating previews,
+restores the two newest entries (`--count N` for more, or `--artifact ID`) as floating previews
+(`--drag frosted|dock|well|dock-close|close|reorder` holds that stack in one frame of a
+drag, described below),
 `--scene feedback` opens Send Feedback (a fixture whose Send stays off unless
 `--feedback-endpoint URL` is given; loopback HTTP is allowed for tests, and
 `https://captur.es/api/feedback` sends real feedback), and
@@ -264,6 +266,31 @@ clean, so the shared token stays.
 Hardware checks waiting for the owner's Linux PC: measure the GSK renderers
 (GL/NGL and cairo) on real GPUs with the resource-gate journeys, Orca, and
 the physical X11, GNOME Wayland and KDE Wayland runs.
+
+Dragging a preview card's image into another app drags its file
+(`text/uri-list`, as History). While the file is out, the card's slot shows
+the style chosen in Preferences' "When you drag a preview out" row, read when
+the drag begins: Frosted imprint (the default; a blurred, dimmed echo of the
+capture behind a hairline, without chrome, at 0.97 scale), Dock gap (the card
+lifts, fades and shrinks away while its slot closes) or Quiet well (a recessed
+veil tile with one "out" glyph). Curves, durations and rules come from the
+shared `captures_app::preview_drag_style`; the pile applies its `CardPose` per
+frame on the frame clock (only while something moves), with the frost as one
+blurred texture baked per image and cross-faded in, never a per-frame blur.
+An accepted drop elsewhere fades and shrinks the imprint, then closes the slot
+smoothly: older cards move toward the stack's anchored edge (down on a bottom
+corner, up toward a top corner's top edge) and the card leaves, and the
+window shrinks, only once the slot has closed. Cancelling, a refusal or a drop
+back on the stack returns the card (the last also shakes it). A mostly
+vertical press on a card of an expanded stack of two or more reorders instead:
+the card lifts and follows the pointer, the cards it passes glide aside, and on
+release it glides into its slot and the stack's order changes. A pointer that
+leaves the column during a reorder hands the same press to the file drag
+(`gdk::Drag::begin`), and everything else glides home. Preferences shows each
+style as a looping native animation of the shared `demo` (a still frame under
+reduced motion), ticking only while mapped. Checked with offscreen
+`--drag` renders and a live Xvfb run (xdotool reorder, hand-off, cancelled
+drag and a drop into a GTK window); not checked on Wayland or real hardware.
 
 History is one virtualized `GtkListView` of card rows. GtkListView keeps up
 to 200 rows alive before GTK 4.12, so only rows near the viewport hold cards

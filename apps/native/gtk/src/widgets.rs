@@ -342,6 +342,10 @@ mod thumbnail_imp {
         pub frost: std::cell::RefCell<Option<glib::WeakRef<gtk::Widget>>>,
         /// The blurred backdrop under it: (where it was baked, texture).
         pub frost_texture: std::cell::RefCell<Option<(graphene::Rect, gtk::gdk::Texture)>>,
+        /// A dragged mini preview's media (`preview_drag_style::CardPose`).
+        pub media: std::cell::Cell<Option<super::MediaPose>>,
+        /// The image at the drag styles' full frost, baked once per texture.
+        pub frosted: std::cell::RefCell<Option<gtk::gdk::Texture>>,
     }
 
     #[glib::object_subclass]
@@ -366,6 +370,10 @@ mod thumbnail_imp {
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let widget = self.obj();
             let (w, h) = (widget.width() as f32, widget.height() as f32);
+            if let Some(media) = self.media.get() {
+                widget.draw_media(snapshot, media);
+                return;
+            }
             let Some((texture, mut rect)) = widget.drawn() else {
                 return;
             };
@@ -518,6 +526,23 @@ mod thumbnail_draw {
             self.drawn_with(true)
         }
 
+        /// The hover look's baked image (shared with [`Self::drawn_with`]'s
+        /// cache, which holds it while the pile is expanded).
+        pub fn hover_texture(&self, texture: &gtk::gdk::Texture, scale: f32) -> gtk::gdk::Texture {
+            let sigma = preview_chrome::HOVER_MEDIA_BLUR as f32 / scale;
+            let brightness = preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32;
+            let mut cached = self.dimmed_texture.borrow_mut();
+            if let Some((radius, light, baked)) = cached.as_ref()
+                && *radius == sigma
+                && *light == brightness
+            {
+                return baked.clone();
+            }
+            let baked = super::dim_and_blur(texture, sigma, brightness, true);
+            *cached = Some((sigma, brightness, baked.clone()));
+            baked
+        }
+
         /// `hover`: false draws the plain image even while dimmed (a Close
         /// streak leaves the locked hover look at its first step).
         pub fn drawn_with(&self, hover: bool) -> Option<(gtk::gdk::Texture, graphene::Rect)> {
@@ -596,6 +621,22 @@ pub fn streak_step(blur: f64) -> Option<usize> {
     step
 }
 
+/// The media's radius at full frost, which [`Thumbnail::set_media`] bakes.
+const MEDIA_FROST: f32 = captures_app::preview_drag_style::FROST_BLUR as f32;
+
+/// How a dragged mini preview draws its media
+/// (`preview_drag_style::CardPose`'s media fields).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MediaPose {
+    /// Gaussian radius in points, up to `preview_drag_style::FROST_BLUR`.
+    pub blur: f32,
+    pub opacity: f32,
+    /// About the media's centre, inside the widget's clip.
+    pub scale: f32,
+    /// How much of the hover look (blurred and dimmed) is left, 0…1.
+    pub hover: f32,
+}
+
 /// A Close or Clear all streak frame on a [`Thumbnail`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Streak {
@@ -662,8 +703,76 @@ impl Thumbnail {
         *self.imp().texture.borrow_mut() = texture;
         self.imp().frost_texture.borrow_mut().take();
         self.imp().dimmed_texture.borrow_mut().take();
+        self.imp().frosted.borrow_mut().take();
         self.imp().streak_textures.borrow_mut().clear();
         self.queue_draw();
+    }
+
+    pub fn has_media(&self) -> bool {
+        self.imp().media.get().is_some()
+    }
+
+    /// Draw the media under a dragged mini preview's pose (`None`: as usual).
+    pub fn set_media(&self, media: Option<MediaPose>) {
+        if self.imp().media.replace(media) != media {
+            self.queue_draw();
+        }
+    }
+
+    /// The media under its drag pose. The frost is one blurred texture,
+    /// baked once per image and cross-faded in as the radius grows, so no
+    /// frame blurs anything; the hover look fades out the same way.
+    fn draw_media(&self, snapshot: &gtk::Snapshot, media: MediaPose) {
+        let imp = self.imp();
+        let Some(texture) = imp.texture.borrow().clone() else {
+            return;
+        };
+        let Some(scale) = imp.texture_scale() else {
+            return;
+        };
+        if media.opacity <= 0. {
+            return;
+        }
+        let (w, h) = (self.width() as f32, self.height() as f32);
+        let (tw, th) = (texture.width() as f32, texture.height() as f32);
+        let at = |extra: f32| {
+            let (dw, dh) = (tw * scale * extra, th * scale * extra);
+            graphene::Rect::new((w - dw) / 2., (h - dh) / 2., dw, dh)
+        };
+        snapshot.push_clip(&graphene::Rect::new(0., 0., w, h));
+        snapshot.push_opacity(f64::from(media.opacity.min(1.)));
+        let hover = media.hover.clamp(0., 1.);
+        let base = |snapshot: &gtk::Snapshot| {
+            if hover > 0. {
+                let dimmed = imp.hover_texture(&texture, scale);
+                snapshot.push_cross_fade(f64::from(hover));
+                snapshot.append_texture(&texture, &at(media.scale));
+                snapshot.pop();
+                let grown = media.scale * captures_app::preview_chrome::HOVER_MEDIA_SCALE as f32;
+                snapshot.append_texture(&dimmed, &at(grown));
+                snapshot.pop();
+            } else {
+                snapshot.append_texture(&texture, &at(media.scale));
+            }
+        };
+        let frost = (media.blur / MEDIA_FROST).clamp(0., 1.);
+        if frost > 0. {
+            let frosted = imp.frosted.borrow().clone();
+            let frosted = frosted.unwrap_or_else(|| {
+                let baked = dim_and_blur(&texture, MEDIA_FROST / scale, 1., true);
+                *imp.frosted.borrow_mut() = Some(baked.clone());
+                baked
+            });
+            snapshot.push_cross_fade(f64::from(frost));
+            base(snapshot);
+            snapshot.pop();
+            snapshot.append_texture(&frosted, &at(media.scale));
+            snapshot.pop();
+        } else {
+            base(snapshot);
+        }
+        snapshot.pop();
+        snapshot.pop();
     }
 
     pub fn set_streak(&self, streak: Option<Streak>) {

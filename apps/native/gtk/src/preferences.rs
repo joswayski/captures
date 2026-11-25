@@ -26,6 +26,7 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch};
 
+mod drag_styles;
 mod find;
 mod updates;
 
@@ -97,15 +98,7 @@ impl Prefs {
 
     /// Write one setting, save, then refresh the look and dependent rows.
     fn set(&self, path: &str, value: Value) {
-        let mut json = serde_json::to_value(&*self.settings.borrow()).unwrap_or_default();
-        let Some(slot) = json.pointer_mut(&pointer(path)) else {
-            return;
-        };
-        if *slot == value {
-            return;
-        }
-        *slot = value;
-        let Ok(next) = serde_json::from_value::<AppSettings>(json) else {
+        let Some(next) = with_setting(&self.settings.borrow(), path, value) else {
             return;
         };
         let saved = match captures_settings::save(&self.settings_file, &next) {
@@ -161,6 +154,18 @@ impl Prefs {
         self.status_label.set_label(message.unwrap_or_default());
         self.status.set_visible(message.is_some());
     }
+}
+
+/// `settings` with the value at a dotted path replaced; `None` when the
+/// path is unknown, the value is already there, or it does not parse.
+fn with_setting(settings: &AppSettings, path: &str, value: Value) -> Option<AppSettings> {
+    let mut json = serde_json::to_value(settings).ok()?;
+    let slot = json.pointer_mut(&pointer(path))?;
+    if *slot == value {
+        return None;
+    }
+    *slot = value;
+    serde_json::from_value(json).ok()
 }
 
 fn pointer(path: &str) -> String {
@@ -1421,6 +1426,8 @@ fn capture_card(prefs: &Rc<Prefs>, window: &gtk::ApplicationWindow) -> gtk::Box 
     picker.add_css_class("keep-end");
     let placement_row = inline_row(row.title, row.description, &picker);
     add(&card, &placement_row);
+    let (styles_row, styles) = drag_styles::row(prefs);
+    add(&card, &styles_row);
 
     let show = prefs.settings.borrow().show_mini_previews;
     let include = prefs.settings.borrow().include_mini_previews_in_captures;
@@ -1472,6 +1479,16 @@ fn capture_card(prefs: &Rc<Prefs>, window: &gtk::ApplicationWindow) -> gtk::Box 
         for (id, corner) in &corners {
             checked(corner, current == *id);
             corner.set_sensitive(show);
+        }
+        let style = drag_styles::drag_style_id(settings);
+        for (id, tile) in &styles.tiles {
+            checked(tile, style == *id);
+            tile.set_sensitive(show);
+        }
+        if show {
+            styles.group.remove_css_class("disabled");
+        } else {
+            styles.group.add_css_class("disabled");
         }
         placement.set_label(preferences::mini_preview_placement_name(&current));
         if show {

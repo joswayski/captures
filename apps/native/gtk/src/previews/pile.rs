@@ -10,13 +10,16 @@ use std::collections::HashMap;
 
 use captures_app::motion::{Animation, Motion, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose};
+use captures_app::preview_drag_style::{
+    self as drag_style, CardPose, DragEnd, DragOut, DragStyle, Reorder,
+};
 use captures_app::preview_motion::{self, DragSway, DustParticle, ExitKind, StackExits, StackFan};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
 
 use crate::tokens::Tokens;
-use crate::widgets::{Icon, Streak, Thumbnail, streak_step};
+use crate::widgets::{Icon, MediaPose, SnapshotArea, Streak, Thumbnail, streak_step};
 
 /// `THUMBNAIL_STACK_SCROLL_DURATION_MS`: an overflow cue's scroll.
 const SCROLL_MS: f64 = 380.;
@@ -26,6 +29,11 @@ pub const CARD_WIDTH: f64 = preview::THUMBNAIL_WIDTH - 2. * preview::THUMBNAIL_P
 const WIDTH: f32 = CARD_WIDTH as f32;
 const HEIGHT: f32 = preview::THUMBNAIL_CARD_HEIGHT as f32;
 
+/// Told a card's id when its drag has played out.
+type CardCallback = Box<dyn Fn(&str)>;
+/// Told a settled reorder's card and its new chronological index.
+type ReorderCallback = Box<dyn Fn(&str, usize)>;
+
 /// One card the pile places.
 pub struct PileCard {
     pub id: String,
@@ -33,6 +41,219 @@ pub struct PileCard {
     /// `glass-strong-solid` shade over a rear card's image.
     pub dim: gtk::Widget,
     pub image: Thumbnail,
+    /// What a file drag leaves in the card's slot, over its image.
+    pub imprint: Imprint,
+}
+
+impl PileCard {
+    /// Chips, buttons and rings: every overlay but the image, the depth
+    /// shade and the imprint.
+    fn for_each_chrome(&self, mut f: impl FnMut(&gtk::Widget)) {
+        let mut child = self.root.first_child();
+        while let Some(widget) = child {
+            if widget != *self.image.upcast_ref::<gtk::Widget>()
+                && widget != self.dim
+                && widget != *self.imprint.area.upcast_ref::<gtk::Widget>()
+            {
+                f(&widget);
+            }
+            child = widget.next_sibling();
+        }
+    }
+
+    /// Show the card under `pose` (`None`: at rest).
+    fn set_pose(&self, pose: Option<(CardPose, f64)>) {
+        let media = pose.map(|(pose, hover)| MediaPose {
+            blur: pose.media_blur as f32,
+            opacity: pose.media_opacity as f32,
+            scale: pose.media_scale as f32,
+            hover: hover as f32,
+        });
+        self.image.set_media(media);
+        self.imprint.set(pose.map(|(pose, _)| pose));
+        let chrome = pose.map_or(1., |(pose, _)| pose.chrome_opacity);
+        self.for_each_chrome(|widget| {
+            if widget.opacity() != chrome {
+                widget.set_opacity(chrome);
+            }
+        });
+    }
+}
+
+/// The imprint a file drag leaves in a card's slot: the hairline inside its
+/// edge, the well's veil and inner shadow, and the "out" glyph in its disc
+/// (`preview_drag_style`'s constants), inside the card's rounded clip.
+#[derive(Clone)]
+pub struct Imprint {
+    pub area: SnapshotArea,
+    pose: std::rc::Rc<Cell<Option<CardPose>>>,
+}
+
+impl Imprint {
+    pub fn new(tokens: &Tokens) -> Self {
+        let pose = std::rc::Rc::new(Cell::new(None::<CardPose>));
+        let (text, veil) = (tokens.rgba("glass-text"), tokens.rgba("glass-veil"));
+        let radius = tokens.number("thumbnail-card-radius");
+        let shown = pose.clone();
+        let area = SnapshotArea::new(move |snapshot, w, h| {
+            if let Some(pose) = shown.get() {
+                draw_imprint(snapshot, (w, h), radius, (text, veil), &pose, 1.);
+            }
+        });
+        area.set_can_target(false);
+        area.update_state(&[gtk::accessible::State::Hidden(true)]);
+        Self { area, pose }
+    }
+
+    fn set(&self, pose: Option<CardPose>) {
+        // Only what the imprint draws: hairline, well and glyph.
+        let drawn = pose.filter(|pose| pose.hairline > 0. || pose.well > 0. || pose.glyph > 0.);
+        if self.pose.replace(drawn) != drawn {
+            self.area.queue_draw();
+        }
+    }
+}
+
+fn alpha(color: gtk::gdk::RGBA, alpha: f64) -> gtk::gdk::RGBA {
+    gtk::gdk::RGBA::new(color.red(), color.green(), color.blue(), alpha as f32)
+}
+
+/// Draw `pose`'s imprint over a `w` × `h` card (inside its rounded clip):
+/// the well's veil and inner shadow, the hairline and the glyph, which
+/// Preferences' small demo cards draw at `glyph_size` × its full size.
+pub fn draw_imprint(
+    snapshot: &gtk::Snapshot,
+    (w, h): (f32, f32),
+    radius: f32,
+    (text, veil): (gtk::gdk::RGBA, gtk::gdk::RGBA),
+    pose: &CardPose,
+    glyph_size: f64,
+) {
+    let corner = graphene::Size::new(radius, radius);
+    let outline = gsk::RoundedRect::new(
+        graphene::Rect::new(0., 0., w, h),
+        corner,
+        corner,
+        corner,
+        corner,
+    );
+    if pose.well > 0. {
+        snapshot.append_color(
+            &alpha(veil, drag_style::WELL_FILL_OPACITY * pose.well),
+            &graphene::Rect::new(0., 0., w, h),
+        );
+        let shadow = drag_style::WELL_INNER_SHADOW_OPACITY * pose.well;
+        snapshot.append_inset_shadow(
+            &outline,
+            &alpha(gtk::gdk::RGBA::BLACK, shadow),
+            0.,
+            1.,
+            0.,
+            drag_style::WELL_INNER_SHADOW_BLUR as f32,
+        );
+    }
+    if pose.hairline > 0. {
+        let line = alpha(text, drag_style::HAIRLINE_OPACITY * pose.hairline);
+        let width = drag_style::HAIRLINE_WIDTH as f32;
+        snapshot.append_border(&outline, &[width; 4], &[line; 4]);
+    }
+    if pose.glyph > 0. {
+        let (cx, cy) = (f64::from(w) / 2., f64::from(h) / 2.);
+        let cr = snapshot.append_cairo(&graphene::Rect::new(0., 0., w, h));
+        cr.translate(cx, cy);
+        cr.scale(pose.glyph_scale * glyph_size, pose.glyph_scale * glyph_size);
+        cr.arc(
+            0.,
+            0.,
+            drag_style::GLYPH_DIAMETER / 2.,
+            0.,
+            std::f64::consts::TAU,
+        );
+        cr.set_source_rgba(1., 1., 1., drag_style::GLYPH_DISC_OPACITY * pose.glyph);
+        let _ = cr.fill();
+        let scale = drag_style::GLYPH_SIZE / 24.;
+        cr.scale(scale, scale);
+        cr.translate(-12., -12.);
+        for line in captures_app::icons::flatten(drag_style::GLYPH_PATH) {
+            let mut points = line.iter();
+            if let Some(first) = points.next() {
+                cr.move_to(first[0].into(), first[1].into());
+                for point in points {
+                    cr.line_to(point[0].into(), point[1].into());
+                }
+            }
+        }
+        cr.set_line_width(drag_style::GLYPH_STROKE);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.set_line_join(gtk::cairo::LineJoin::Round);
+        cr.set_source_rgba(
+            text.red().into(),
+            text.green().into(),
+            text.blue().into(),
+            drag_style::GLYPH_OPACITY * pose.glyph,
+        );
+        let _ = cr.stroke();
+    }
+}
+
+/// A card's file drag out of the stack, until its end has played.
+pub struct FileDrag {
+    id: String,
+    model: DragOut,
+    began: f64,
+    /// The card wore its hover look when the drag began; it fades out.
+    hovered: bool,
+}
+
+/// The hover look's fade as a drag begins (`.preview-overlay`'s 160 ms).
+const HOVER_FADE_MS: f64 = 160.;
+
+/// A card carried up or down the stack.
+pub struct Carried {
+    id: String,
+    model: Reorder,
+    /// The latest frame: each card's offset (chronological) and the lift.
+    offsets: Vec<f64>,
+    lift: f64,
+    /// The latest frame moved something.
+    moving: bool,
+    /// The carried card's resting top in the pile when it was picked up.
+    home_top: f64,
+}
+
+/// Take the drags whose end has played by `now`: the others keep their
+/// card in its slot, posed.
+fn take_finished(drags: &mut Vec<FileDrag>, now: f64) -> Vec<(String, DragEnd)> {
+    let done = drags
+        .iter()
+        .filter(|drag| drag.model.finished(now))
+        .filter_map(|drag| Some((drag.id.clone(), drag.model.ended()?)))
+        .collect();
+    drags.retain(|drag| !drag.model.finished(now));
+    done
+}
+
+/// Each card's y offset while file drags close their slots: cards older
+/// than a closing slot (`(index, slot)`) move toward the anchored edge.
+pub fn closing_offsets(count: usize, closing: &[(usize, f64)], top: bool) -> Vec<f64> {
+    (0..count)
+        .map(|index| {
+            closing
+                .iter()
+                .filter(|(dragged, _)| index < *dragged)
+                .map(|(_, slot)| drag_style::closing_shift(*slot, top))
+                .sum()
+        })
+        .collect()
+}
+
+/// Move `from` to `to` in a chronological list, as
+/// `PreviewStack::move_card` does to the membership.
+pub fn move_item<T>(items: &mut Vec<T>, from: usize, to: usize) {
+    if from < items.len() {
+        let item = items.remove(from);
+        items.insert(to.min(items.len()), item);
+    }
 }
 
 mod imp {
@@ -89,6 +310,18 @@ mod imp {
         pub max_scroll: Cell<f64>,
         /// `.thumbnail-overflow-cue-older` and `-newer`.
         pub cues: RefCell<Vec<gtk::Button>>,
+        /// File drags out of the stack, until their ends have played.
+        pub drags: RefCell<Vec<super::FileDrag>>,
+        /// A card carried up or down the stack.
+        pub carried: RefCell<Option<super::Carried>>,
+        /// A dropped file's slot has closed: the stack lets its card go.
+        pub on_dropped: RefCell<Option<super::CardCallback>>,
+        /// A file drag's card is back at rest.
+        pub on_returned: RefCell<Option<super::CardCallback>>,
+        /// A reorder settled: the card now sits at this chronological index.
+        pub on_reordered: RefCell<Option<super::ReorderCallback>>,
+        /// `--drag` fixtures: a still clock for drags and reorders.
+        pub drag_clock: Cell<Option<f64>>,
     }
 
     #[glib::object_subclass]
@@ -141,11 +374,27 @@ mod imp {
         }
 
         /// Children in order; a dissolving card's dust paints right above
-        /// it, outside its clip.
+        /// it, outside its clip, and a carried card above the other cards.
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
+            let carried = self.carried.borrow().as_ref().and_then(|carried| {
+                self.cards
+                    .borrow()
+                    .iter()
+                    .find(|card| card.id == carried.id)
+                    .map(|card| card.root.clone())
+            });
+            let mut held = carried.clone();
             let mut child = obj.first_child();
             while let Some(widget) = child {
+                if carried.as_ref() == Some(&widget) {
+                    child = widget.next_sibling();
+                    continue;
+                }
+                let card = self.cards.borrow().iter().any(|card| card.root == widget);
+                if !card && let Some(carried) = held.take() {
+                    obj.snapshot_child(&carried, snapshot);
+                }
                 if self.controls.borrow().as_ref() == Some(&widget) {
                     obj.snapshot_toolbar(&widget, snapshot);
                 } else {
@@ -164,6 +413,9 @@ mod imp {
                     obj.snapshot_sparkles(snapshot);
                 }
                 child = widget.next_sibling();
+            }
+            if let Some(carried) = held {
+                obj.snapshot_child(&carried, snapshot);
             }
         }
     }
@@ -664,6 +916,322 @@ impl Pile {
         self.animate();
     }
 
+    /// The clock drags and reorders run on; `--drag` fixtures hold it.
+    fn drag_now(&self) -> f64 {
+        self.imp().drag_clock.get().unwrap_or_else(|| self.now_ms())
+    }
+
+    /// `--drag` fixtures: hold every drag and reorder at `at` milliseconds.
+    pub fn set_drag_clock(&self, at: Option<f64>) {
+        self.imp().drag_clock.set(at);
+        self.animate();
+    }
+
+    pub fn connect_dropped(&self, dropped: impl Fn(&str) + 'static) {
+        *self.imp().on_dropped.borrow_mut() = Some(Box::new(dropped));
+    }
+
+    pub fn connect_returned(&self, returned: impl Fn(&str) + 'static) {
+        *self.imp().on_returned.borrow_mut() = Some(Box::new(returned));
+    }
+
+    pub fn connect_reordered(&self, reordered: impl Fn(&str, usize) + 'static) {
+        *self.imp().on_reordered.borrow_mut() = Some(Box::new(reordered));
+    }
+
+    fn card_root(&self, id: &str) -> Option<gtk::Widget> {
+        self.imp()
+            .cards
+            .borrow()
+            .iter()
+            .find(|card| card.id == id)
+            .map(|card| card.root.clone())
+    }
+
+    /// `id`'s file left the stack: its slot shows `style` until the drag
+    /// ends. A collapsed pile has no slot to show it in.
+    pub fn drag_out_begin(&self, id: &str, style: DragStyle, hovered: bool) {
+        let imp = self.imp();
+        if imp.collapsed.get() {
+            return;
+        }
+        let Some(root) = self.card_root(id) else {
+            return;
+        };
+        let now = self.drag_now();
+        let mut drags = imp.drags.borrow_mut();
+        drags.retain(|drag| drag.id != id);
+        drags.push(FileDrag {
+            id: id.to_owned(),
+            model: DragOut::new(style, now, self.reduced()),
+            began: now,
+            hovered: hovered && !self.reduced(),
+        });
+        drop(drags);
+        root.remove_css_class("drag-returning");
+        // The frame's shadow and rings leave with the chrome.
+        if style != DragStyle::Dock {
+            root.add_css_class("drag-imprint");
+        }
+        self.animate();
+    }
+
+    /// `id`'s file drag ended: its card returns, or leaves and its slot
+    /// closes (then [`Self::connect_dropped`] lets it go). False when no
+    /// drag of it was showing.
+    pub fn drag_out_end(&self, id: &str, end: DragEnd) -> bool {
+        let imp = self.imp();
+        let now = self.drag_now();
+        let style = {
+            let mut drags = imp.drags.borrow_mut();
+            let Some(drag) = drags
+                .iter_mut()
+                .find(|drag| drag.id == id && drag.model.ended().is_none())
+            else {
+                return false;
+            };
+            drag.model.end(end, now);
+            drag.model.style()
+        };
+        if end == DragEnd::Returned
+            && style != DragStyle::Dock
+            && let Some(root) = self.card_root(id)
+        {
+            root.remove_css_class("drag-imprint");
+            root.add_css_class("drag-returning");
+        }
+        self.update_cards();
+        self.animate();
+        true
+    }
+
+    /// Each dragged card's pose now and how much hover look it keeps.
+    fn drag_poses(&self, now: f64) -> HashMap<String, (CardPose, f64)> {
+        self.imp()
+            .drags
+            .borrow()
+            .iter()
+            .map(|drag| {
+                let hover = if drag.hovered {
+                    1. - ((now - drag.began) / HOVER_FADE_MS).clamp(0., 1.)
+                } else {
+                    0.
+                };
+                (drag.id.clone(), (drag.model.pose(now), hover))
+            })
+            .collect()
+    }
+
+    /// A drag is still moving: it ended, or its look is still settling.
+    fn drags_moving(&self, now: f64) -> bool {
+        self.imp().drags.borrow().iter().any(|drag| {
+            drag.model.ended().is_some()
+                || (drag.hovered && now - drag.began < HOVER_FADE_MS)
+                || drag.model.pose(now) != drag.model.pose(now + 10_000.)
+        })
+    }
+
+    /// Let go of drags whose end has played: a returned card is at rest
+    /// again; a dropped one leaves the stack in this same frame.
+    fn prune_drags(&self) {
+        let imp = self.imp();
+        let now = self.drag_now();
+        let finished = take_finished(&mut imp.drags.borrow_mut(), now);
+        for (id, end) in finished {
+            if end == DragEnd::Returned {
+                if let Some(card) = imp.cards.borrow().iter().find(|card| card.id == id) {
+                    card.set_pose(None);
+                    card.root.remove_css_class("drag-imprint");
+                    card.root.remove_css_class("drag-returning");
+                }
+                self.update_cards();
+                if let Some(returned) = imp.on_returned.borrow().as_ref() {
+                    returned(&id);
+                }
+            } else if let Some(dropped) = imp.on_dropped.borrow().as_ref() {
+                dropped(&id);
+            } else {
+                self.remove_card(&id);
+            }
+        }
+    }
+
+    /// Pick `id` up to carry it within the stack. False when it cannot
+    /// move: a lone card, a collapsed or flying pile, or another drag, exit
+    /// or reorder still playing.
+    pub fn reorder_begin(&self, id: &str) -> bool {
+        let imp = self.imp();
+        let now = self.now_ms();
+        let (_, since) = imp.fly.get();
+        if imp.collapsed.get()
+            || self.tweens().0.running(now - since, self.reduced())
+            || !imp.exits.borrow().is_empty()
+            || !imp.drags.borrow().is_empty()
+            || imp.carried.borrow().is_some()
+        {
+            return false;
+        }
+        let (count, from, root) = {
+            let cards = imp.cards.borrow();
+            let Some(from) = cards.iter().position(|card| card.id == id) else {
+                return false;
+            };
+            (cards.len(), from, cards[from].root.clone())
+        };
+        let Some(&(_, home_top)) = imp.origins.borrow().get(id) else {
+            return false;
+        };
+        if count < 2 {
+            return false;
+        }
+        let top = imp.top_anchor.get();
+        let model = Reorder::new(count, from, top, self.drag_now(), self.reduced());
+        *imp.carried.borrow_mut() = Some(Carried {
+            id: id.to_owned(),
+            model,
+            offsets: vec![0.; count],
+            lift: 0.,
+            moving: true,
+            home_top: f64::from(home_top),
+        });
+        root.add_css_class("reorder-lifted");
+        self.animate();
+        true
+    }
+
+    /// The pointer moved `dy` points since the press that picked it up.
+    pub fn reorder_pointer(&self, dy: f64) {
+        if let Some(carried) = self.imp().carried.borrow_mut().as_mut() {
+            carried.model.pointer(dy);
+            carried.moving = true;
+        }
+        self.animate();
+    }
+
+    /// Whether the pointer, at `(x, y)` in the pile, has left the carried
+    /// card's column or gone past the stack's outermost slot far enough to
+    /// become a file drag (`preview_drag_style::reorder_escapes`).
+    pub fn reorder_escapes(&self, x: f64, y: f64) -> bool {
+        let imp = self.imp();
+        let carried = imp.carried.borrow();
+        let Some(carried) = carried.as_ref() else {
+            return false;
+        };
+        let count = carried.offsets.len();
+        let top = imp.top_anchor.get();
+        let from = carried.model.from();
+        let content = carried.home_top - Reorder::slot_top(count, from, top);
+        let tops = (0..count).map(|index| Reorder::slot_top(count, index, top));
+        let first = tops.clone().fold(f64::INFINITY, f64::min) + content;
+        let last = tops.fold(f64::NEG_INFINITY, f64::max) + content + f64::from(HEIGHT);
+        let pad = preview::THUMBNAIL_PADDING;
+        let outside = (pad - x).max(x - (pad + CARD_WIDTH)).max(0.);
+        drag_style::reorder_escapes(outside, (first - y).max(y - last))
+    }
+
+    /// Let go of the carried card: it glides into its new slot.
+    pub fn reorder_drop(&self) {
+        self.reorder_release(false);
+    }
+
+    /// Give the reorder up (it became a file drag): every card glides home.
+    pub fn reorder_cancel(&self) {
+        self.reorder_release(true);
+    }
+
+    fn reorder_release(&self, cancel: bool) {
+        let now = self.drag_now();
+        let id = {
+            let mut carried = self.imp().carried.borrow_mut();
+            let Some(carried) = carried.as_mut() else {
+                return;
+            };
+            if cancel {
+                carried.model.cancel(now);
+            } else {
+                carried.model.drop(now);
+            }
+            carried.moving = true;
+            carried.id.clone()
+        };
+        if let Some(root) = self.card_root(&id) {
+            root.remove_css_class("reorder-lifted");
+        }
+        self.animate();
+    }
+
+    /// A card is carried (until it has settled into its slot).
+    pub fn is_reordering(&self) -> bool {
+        self.imp().carried.borrow().is_some()
+    }
+
+    /// Drop a reorder at once: the stack's cards changed under it.
+    fn abandon_reorder(&self) {
+        if let Some(carried) = self.imp().carried.take()
+            && let Some(root) = self.card_root(&carried.id)
+        {
+            root.remove_css_class("reorder-lifted");
+        }
+    }
+
+    /// Advance a reorder one frame; once let go and settled, commit its
+    /// order and lay the stack out without offsets in the same frame.
+    fn tick_reorder(&self) {
+        let imp = self.imp();
+        let now = self.drag_now();
+        let settled = {
+            let mut carried = imp.carried.borrow_mut();
+            let Some(carried) = carried.as_mut() else {
+                return;
+            };
+            let (offsets, lift) = carried.model.frame(now);
+            carried.moving = offsets != carried.offsets || lift != carried.lift;
+            carried.offsets = offsets;
+            carried.lift = lift;
+            carried
+                .model
+                .settled(now)
+                .then(|| (carried.id.clone(), carried.model.from(), carried.model.to()))
+        };
+        let Some((id, from, to)) = settled else {
+            return;
+        };
+        imp.carried.take();
+        if from != to {
+            move_item(&mut imp.cards.borrow_mut(), from, to);
+            // Paint order follows the chronology again.
+            let first_cue = imp.cues.borrow().first().cloned();
+            for card in imp.cards.borrow().iter() {
+                card.root.insert_before(self, first_cue.as_ref());
+            }
+        }
+        self.update_cards();
+        self.queue_resize();
+        if let Some(reordered) = imp.on_reordered.borrow().as_ref() {
+            reordered(&id, to);
+        }
+    }
+
+    /// `--drag reorder`: carry chronological `from` by `dy`, played up to
+    /// `at` ms on the held clock.
+    pub fn reorder_fixture(&self, from: usize, dy: f64, at: f64) {
+        let imp = self.imp();
+        let Some(id) = imp.cards.borrow().get(from).map(|card| card.id.clone()) else {
+            return;
+        };
+        imp.drag_clock.set(Some(0.));
+        if !self.reorder_begin(&id) {
+            return;
+        }
+        self.reorder_pointer(dy);
+        let mut now = 0.;
+        while now < at {
+            now = (now + 16.).min(at);
+            imp.drag_clock.set(Some(now));
+            self.tick_reorder();
+        }
+    }
+
     /// Drop exits that have finished and let the stack shrink.
     fn prune_exits(&self) {
         let imp = self.imp();
@@ -710,6 +1278,7 @@ impl Pile {
         card.root.insert_before(self, imp.cues.borrow().first());
         // The newest card comes into view.
         imp.scroll.set(None);
+        self.abandon_reorder();
         imp.arrivals
             .borrow_mut()
             .insert(card.id.clone(), self.now_ms());
@@ -732,6 +1301,8 @@ impl Pile {
         imp.arrivals.borrow_mut().remove(id);
         imp.rejects.borrow_mut().remove(id);
         imp.dust.borrow_mut().remove(id);
+        imp.drags.borrow_mut().retain(|drag| drag.id != id);
+        self.abandon_reorder();
         imp.exits.borrow_mut().release(id, false);
         let live = self.live_ids();
         imp.exits.borrow_mut().sync(&live);
@@ -1046,10 +1617,15 @@ impl Pile {
             expand.update_property(&[gtk::accessible::Property::Label(&label)]);
         }
         let exits = imp.exits.borrow();
+        let drags = imp.drags.borrow();
         for (index, card) in cards.iter().enumerate() {
             let depth = count - 1 - index;
-            // An exiting card takes no input and leaves the tree at once.
-            let exiting = exits.exiting(&card.id).is_some();
+            // An exiting card, or one whose file was dropped elsewhere,
+            // takes no input and leaves the tree at once.
+            let exiting = exits.exiting(&card.id).is_some()
+                || drags
+                    .iter()
+                    .any(|drag| drag.id == card.id && drag.model.ended() == Some(DragEnd::Dropped));
             card.root.set_can_target(!collapsed && !exiting);
             card.root.update_state(&[gtk::accessible::State::Hidden(
                 exiting || (collapsed && depth > 0),
@@ -1066,6 +1642,8 @@ impl Pile {
         }
         self.add_tick_callback(|pile, _| {
             pile.prune_exits();
+            pile.prune_drags();
+            pile.tick_reorder();
             pile.tick_carry();
             pile.queue_resize();
             if !pile.imp().dust.borrow().is_empty() {
@@ -1116,6 +1694,12 @@ impl Pile {
             || !imp.rejects.borrow().is_empty()
             || !imp.exits.borrow().is_empty()
             || self.carry_moving(now, deepest, &fan, reduced)
+            || self.drags_moving(self.drag_now())
+            || imp
+                .carried
+                .borrow()
+                .as_ref()
+                .is_some_and(|carried| carried.moving)
             || imp
                 .scroll
                 .get()
@@ -1285,11 +1869,26 @@ impl Pile {
                 gsk::Transform::new().translate(&graphene::Point::new((width - w) / 2., y));
             cue.allocate(w as i32, h as i32, -1, Some(transform));
         }
+        // File drags close their slots toward the anchored edge, and a
+        // carried card's neighbours glide out of its way.
+        let poses = self.drag_poses(self.drag_now());
+        let closing: Vec<(usize, f64)> = cards
+            .iter()
+            .enumerate()
+            .filter_map(|(index, card)| Some((index, poses.get(&card.id)?.0.slot)))
+            .collect();
+        let closing = closing_offsets(count, &closing, top);
+        let carried = imp.carried.borrow();
+        let carried = carried
+            .as_ref()
+            .filter(|carried| carried.offsets.len() == count);
         for (index, card) in cards.iter().enumerate() {
             let depth = count - 1 - index;
+            let moved = closing[index] + carried.map_or(0., |carried| carried.offsets[index]);
             let expanded = preview::card_layout_in(count, index, false, top, false)
                 .map_or(0., |l| l.y)
-                + shift;
+                + shift
+                + moved * (1. - progress);
             let front = preview::collapsed_padding(count);
             let rest = preview::collapsed_card_pose(&card.id, depth, false, gravity, top);
             let lean = self.lean(depth, now, &fan_tween, reduced);
@@ -1360,6 +1959,18 @@ impl Pile {
                 }
                 None => {}
             }
+            let dragged = poses.get(&card.id).copied();
+            if let Some((drag, _)) = dragged {
+                opacity *= drag.opacity;
+                scale = (scale.0 * drag.scale, scale.1 * drag.scale);
+            }
+            if dragged.is_some() || card.image.has_media() {
+                card.set_pose(dragged);
+            }
+            if let Some(carried) = carried.filter(|carried| carried.id == card.id) {
+                let lift = 1. + (drag_style::REORDER_LIFT_SCALE - 1.) * carried.lift;
+                scale = (scale.0 * lift, scale.1 * lift);
+            }
             let centre_x = centre_x + slide;
             let centre_y = centre_y + shift;
             origins.insert(
@@ -1401,6 +2012,142 @@ impl Pile {
                 -1,
                 Some(transform),
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use captures_app::preview::PreviewStack;
+
+    /// A card's top in a stack of `count` whose window is `height` tall,
+    /// as `place` lays an expanded, unscrolled stack out: a bottom stack
+    /// keeps its cards on the window's bottom edge.
+    fn top(count: usize, index: usize, top: bool, height: f64) -> f64 {
+        let edge = if top {
+            0.
+        } else {
+            height - preview::stack_height(count)
+        };
+        edge + preview::card_layout_in(count, index, false, top, false)
+            .expect("in the stack")
+            .y
+    }
+
+    fn drag(id: &str, style: DragStyle) -> FileDrag {
+        FileDrag {
+            id: id.into(),
+            model: DragOut::new(style, 0., false),
+            began: 0.,
+            hovered: false,
+        }
+    }
+
+    #[test]
+    fn a_dropped_card_keeps_its_slot_until_its_end_has_played() {
+        let mut drags = vec![drag("a", DragStyle::Frosted), drag("b", DragStyle::Dock)];
+        // Out of the stack, with no end yet: nothing finishes.
+        assert!(take_finished(&mut drags, 5_000.).is_empty());
+        drags[0].model.end(DragEnd::Dropped, 5_000.);
+        drags[1].model.end(DragEnd::Returned, 5_000.);
+        let dropped = DragOut::end_ms(DragStyle::Frosted, DragEnd::Dropped);
+        let returned = DragOut::end_ms(DragStyle::Dock, DragEnd::Returned);
+        assert!(dropped < returned);
+        assert!(take_finished(&mut drags, 5_000. + dropped - 1.).is_empty());
+        assert_eq!(drags.len(), 2);
+        assert_eq!(
+            take_finished(&mut drags, 5_000. + dropped),
+            vec![("a".to_owned(), DragEnd::Dropped)]
+        );
+        assert_eq!(
+            take_finished(&mut drags, 5_000. + returned),
+            vec![("b".to_owned(), DragEnd::Returned)]
+        );
+        assert!(drags.is_empty());
+    }
+
+    #[test]
+    fn a_closed_slot_leaves_every_card_where_removal_puts_it() {
+        for anchored_top in [false, true] {
+            for (count, dragged) in [(2, 0), (2, 1), (4, 0), (4, 2), (4, 3)] {
+                let mut model = DragOut::new(DragStyle::Frosted, 0., false);
+                model.end(DragEnd::Dropped, 1_000.);
+                let done = 1_000. + DragOut::end_ms(DragStyle::Frosted, DragEnd::Dropped);
+                assert!(model.finished(done));
+                let closing =
+                    closing_offsets(count, &[(dragged, model.pose(done).slot)], anchored_top);
+                // The window is one slot shorter afterwards; a bottom stack
+                // keeps its bottom edge, a top stack its top edge.
+                let (before, after) = (
+                    preview::stack_height(count),
+                    preview::stack_height(count - 1),
+                );
+                let grown = if anchored_top { 0. } else { before - after };
+                for index in (0..count).filter(|index| *index != dragged) {
+                    let left = top(count, index, anchored_top, before) + closing[index];
+                    let new = if index < dragged { index } else { index - 1 };
+                    let right = top(count - 1, new, anchored_top, after) + grown;
+                    assert!(
+                        (left - right).abs() < 1e-9,
+                        "top {anchored_top}, {count} cards, drag {dragged}, card {index}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn older_cards_close_toward_the_anchored_edge_and_newer_ones_stay() {
+        // Chronological, oldest first: card 2 of 4 is half closed.
+        let bottom = closing_offsets(4, &[(2, 0.5)], false);
+        let top = closing_offsets(4, &[(2, 0.5)], true);
+        let half = drag_style::SLOT_PITCH / 2.;
+        // A bottom stack lists oldest first from its top: older cards move
+        // down toward the bottom edge.
+        assert_eq!(bottom, vec![half, half, 0., 0.]);
+        // A top stack lists newest first from its top edge: older cards,
+        // below the slot, move up.
+        assert_eq!(top, vec![-half, -half, 0., 0.]);
+        // Two closing slots add up for the cards older than both.
+        assert_eq!(
+            closing_offsets(3, &[(1, 0.), (2, 0.)], false),
+            vec![2. * drag_style::SLOT_PITCH, drag_style::SLOT_PITCH, 0.]
+        );
+    }
+
+    #[test]
+    fn a_settled_reorder_commits_the_order_its_cards_already_show() {
+        for anchored_top in [false, true] {
+            let ids: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+            let mut stack = PreviewStack::default();
+            for id in &ids {
+                stack.insert(id.clone());
+            }
+            // Carry the oldest card two slots on, toward the newest.
+            let toward_newest = if anchored_top { -1. } else { 1. };
+            let mut reorder = Reorder::new(4, 0, anchored_top, 0., false);
+            reorder.pointer(toward_newest * 2. * drag_style::SLOT_PITCH);
+            reorder.drop(100.);
+            let (mut now, mut offsets) = (100., vec![]);
+            while !reorder.settled(now) {
+                now += 16.;
+                offsets = reorder.frame(now).0;
+                assert!(now < 2_000.);
+            }
+            let (from, to) = (reorder.from(), reorder.to());
+            assert_eq!((from, to), (0, 2));
+            let mut cards = ids.clone();
+            move_item(&mut cards, from, to);
+            assert!(stack.move_card(&ids[from], to));
+            assert_eq!(stack.ids(), cards.as_slice());
+            assert_eq!(cards, ["b", "c", "a", "d"]);
+            // Laid out without offsets, every card stays where it glided.
+            for (old, id) in ids.iter().enumerate() {
+                let new = cards.iter().position(|card| card == id).expect("kept");
+                let slot = |index| Reorder::slot_top(4, index, anchored_top);
+                assert!((slot(old) + offsets[old] - slot(new)).abs() < 1e-9, "{id}");
+            }
         }
     }
 }
