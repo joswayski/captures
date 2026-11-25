@@ -17,6 +17,7 @@ use windows::core::*;
 
 use super::export::Ex;
 use super::props::{Prop, TextChange};
+use super::quick_bar::Quick;
 use super::{Editor, Event, Target};
 use crate::gfx::{self, Style, rect};
 use crate::scene::Rect;
@@ -27,6 +28,8 @@ pub enum MenuKind {
     Style,
     /// The selected label's Font select.
     Font,
+    /// The same Font select in the quick format bar over the label.
+    QuickFont,
     /// The Crop section's Aspect ratio select.
     Aspect,
     /// The header's Canvas zoom preset select.
@@ -64,6 +67,7 @@ impl MenuKind {
         matches!(
             self,
             MenuKind::Font
+                | MenuKind::QuickFont
                 | MenuKind::Aspect
                 | MenuKind::Preset
                 | MenuKind::Export(_)
@@ -76,6 +80,7 @@ impl MenuKind {
         match self {
             MenuKind::Style => Prop::StyleTrigger,
             MenuKind::Font => Prop::Font,
+            MenuKind::QuickFont => Prop::Quick(Quick::Font),
             MenuKind::Aspect => Prop::Aspect,
             MenuKind::Preset => Prop::Preset,
             MenuKind::Export(ex) => Prop::Export(ex),
@@ -92,7 +97,7 @@ impl Editor {
                 .iter()
                 .map(|p| p.label.to_owned())
                 .collect(),
-            MenuKind::Font => self
+            MenuKind::Font | MenuKind::QuickFont => self
                 .font_options()
                 .into_iter()
                 .map(|(_, label)| label)
@@ -159,7 +164,7 @@ impl Editor {
                 let id = self.style_preset();
                 TEXT_STYLE_PRESETS.iter().position(|p| p.id == id)
             }
-            MenuKind::Font => {
+            MenuKind::Font | MenuKind::QuickFont => {
                 let family = &self.selected_text()?.font_family;
                 self.font_options()
                     .iter()
@@ -275,6 +280,7 @@ impl Editor {
                 STYLE_ROW,
             ),
             MenuKind::Font
+            | MenuKind::QuickFont
             | MenuKind::Aspect
             | MenuKind::Preset
             | MenuKind::Export(_)
@@ -368,6 +374,7 @@ impl Editor {
                 Rect::new(left, top, trigger.w, h)
             }
             MenuKind::Font
+            | MenuKind::QuickFont
             | MenuKind::Aspect
             | MenuKind::Preset
             | MenuKind::Export(_)
@@ -500,7 +507,7 @@ impl Editor {
                     self.apply_text(TextChange::Preset(preset.id));
                 }
             }
-            MenuKind::Font => {
+            MenuKind::Font | MenuKind::QuickFont => {
                 if let Some((key, _)) = self.font_options().into_iter().nth(index) {
                     self.apply_text(TextChange::Family(key));
                 }
@@ -526,8 +533,13 @@ impl Editor {
     /// while closing it, matching shipping's HTML selects on Windows.
     /// Preferences uses CustomSelect instead; the Text style picker is a button.
     pub(super) fn menu_alt_key(&mut self, vk: VIRTUAL_KEY) -> bool {
-        let Some(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset | Prop::Blend))) =
-            self.focus
+        let Some(Target::Prop(
+            prop @ (Prop::Font
+            | Prop::Quick(Quick::Font)
+            | Prop::Aspect
+            | Prop::Preset
+            | Prop::Blend),
+        )) = self.focus
         else {
             return false;
         };
@@ -551,6 +563,7 @@ impl Editor {
         let kind = match prop {
             Prop::StyleTrigger => MenuKind::Style,
             Prop::Font => MenuKind::Font,
+            Prop::Quick(Quick::Font) => MenuKind::QuickFont,
             Prop::Aspect => MenuKind::Aspect,
             Prop::Preset => MenuKind::Preset,
             Prop::Export(ex) if ex.is_select() => MenuKind::Export(ex),
@@ -687,6 +700,7 @@ impl Editor {
         let radius = match menu.kind {
             MenuKind::Style => t.n("r-xl"),
             MenuKind::Font
+            | MenuKind::QuickFont
             | MenuKind::Aspect
             | MenuKind::Preset
             | MenuKind::Export(_)
@@ -760,6 +774,7 @@ impl Editor {
                 )?;
             }
             MenuKind::Font
+            | MenuKind::QuickFont
             | MenuKind::Aspect
             | MenuKind::Preset
             | MenuKind::Export(_)

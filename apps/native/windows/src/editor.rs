@@ -74,6 +74,7 @@ mod import;
 mod layer_menu;
 mod menu;
 mod props;
+mod quick_bar;
 mod rotate;
 mod rows;
 mod text;
@@ -86,6 +87,7 @@ pub use menu::MenuKind;
 pub use props::{
     CUSTOM, Check, Field, Note, Num, Prop, Range, Row, bounds as range_bounds, range_text,
 };
+pub use quick_bar::Quick;
 
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
 pub const SIZE: (f32, f32) = (1280., 840.);
@@ -313,6 +315,8 @@ enum Kind {
     Overlay,
     /// The inline text caret, blinking on the compositor.
     Caret,
+    /// The quick format bar over a selected label.
+    QuickBar,
     /// `.screenshot-sidebar` background, borders and section rule.
     Sidebar,
     /// `.screenshot-layers-heading`.
@@ -824,6 +828,9 @@ pub struct Editor {
     trim_shown: bool,
     /// The Expand canvas preview and armed state the overlay last drew.
     expand_shown: Option<(captures_app::editor_canvas::CanvasExpandPreview, bool)>,
+    /// The quick format bar's card and the text size it last drew.
+    quick_node: usize,
+    quick_drawn: Option<f64>,
     motions: Vec<Motion>,
     dcomp: Option<IDCompositionDesktopDevice>,
     _target: Option<IDCompositionTarget>,
@@ -1489,6 +1496,8 @@ impl Editor {
             tip_node: 0,
             tips: tips::Tips::default(),
             expand_shown: None,
+            quick_node: 0,
+            quick_drawn: None,
             motions: Vec::new(),
             dcomp: None,
             _target: None,
@@ -1556,6 +1565,12 @@ impl Editor {
         }
         self.caret = self.add(Some(self.well), Kind::Caret, 0.);
         self.nodes[self.caret].visible = false;
+        // Above the canvas layers and the comparison it floats over.
+        self.quick_node = self.add(Some(self.well), Kind::QuickBar, quick_bar::BLEED);
+        self.nodes[self.quick_node].visible = false;
+        for part in quick_bar::PARTS {
+            self.control(self.quick_node, Target::Prop(Prop::Quick(part)), 0.);
+        }
         let rail = self.add(Some(root), Kind::Rail, 0.);
         for i in 0..RAIL_TOOLS.len() {
             self.control(rail, Target::Tool(i), 0.);
@@ -1785,6 +1800,7 @@ impl Editor {
                 self.exists(target) && !self.step_disabled(num, up)
             }
             Target::Prop(Prop::Number(num)) => self.exists(target) && !self.num_disabled(num),
+            Target::Prop(Prop::Quick(part)) => self.quick_enabled(part),
             _ => self.exists(target),
         }
     }
@@ -2153,7 +2169,7 @@ impl Editor {
             return;
         }
         if self.inline.is_some() {
-            self.finish_text();
+            self.finish_text_for_tool();
         }
         self.tool = key;
         self.gesture = None;
@@ -2187,6 +2203,7 @@ impl Editor {
                 && !matches!(
                     s.as_str(),
                     "layer-menu"
+                        | "text"
                         | "rotate"
                         | "trim"
                         | "expand"
@@ -3605,7 +3622,12 @@ impl Editor {
             let input = matches!(
                 target,
                 Target::Prop(
-                    Prop::Font | Prop::Aspect | Prop::Blend | Prop::Number(_) | Prop::Textarea
+                    Prop::Font
+                        | Prop::Quick(Quick::Font)
+                        | Prop::Aspect
+                        | Prop::Blend
+                        | Prop::Number(_)
+                        | Prop::Textarea
                 )
             );
             let ring = (self.focus_visible || input)
@@ -3666,6 +3688,14 @@ impl Editor {
         // The open Background card takes the points over it.
         if self.bg_open && self.bg_menu_rect().contains(x, y) {
             return Self::bg_menu_props().map(Target::Prop).find(|&t| inside(t));
+        }
+        // The quick format bar takes the points over it from the canvas and
+        // the comparison under it.
+        if self.quick_contains(x, y) {
+            return quick_bar::PARTS
+                .map(|part| Target::Prop(Prop::Quick(part)))
+                .into_iter()
+                .find(|&t| inside(t));
         }
         // The comparison's controls sit over the canvas; its range yields to
         // a drawing tool (`is-draw-locked`).
@@ -3769,6 +3799,7 @@ impl Editor {
         // The canvas stage's Expand canvas action, then
         // `.compression-preview-frame`, follow the canvas in the viewport.
         list.push(Target::Expand);
+        list.extend(quick_bar::PARTS.map(|part| Target::Prop(Prop::Quick(part))));
         list.extend(compare::PARTS.map(Target::Compare));
         list.push(Target::Divider);
         list.push(Target::AddLayer);
@@ -3814,6 +3845,7 @@ impl Editor {
         for target in [self.focus, focus].into_iter().flatten() {
             if let Target::Prop(
                 prop @ (Prop::Font
+                | Prop::Quick(Quick::Font)
                 | Prop::Aspect
                 | Prop::Blend
                 | Prop::Number(_)
@@ -4220,6 +4252,7 @@ impl Editor {
             Kind::BgMenu => self.draw_bg_menu(dc, (w, h))?,
             Kind::LayerCard => self.draw_layer_card(dc, (w, h))?,
             Kind::Compare => self.draw_compare(dc, (w, h))?,
+            Kind::QuickBar => self.draw_quick_bar(dc, (w, h))?,
             Kind::Tip => self.draw_tip(dc, (w, h))?,
             Kind::LayerScroll => self.draw_layer_scroll(dc, (w, h))?,
         }
@@ -5246,6 +5279,7 @@ impl Editor {
             self.refresh(false);
         }
         self.place_expand();
+        self.place_quick();
         self.place_tip();
         Ok(())
     }
@@ -5973,6 +6007,7 @@ impl Editor {
                     // The processing veil takes presses (`cursor: wait`).
                     None if self.l.well.contains(x, y)
                         && !self.flyout
+                        && !self.quick_contains(x, y)
                         && !self.compare_blocks(x, y) =>
                     {
                         self.set_focus(None, false);
@@ -6097,6 +6132,7 @@ impl Editor {
                         }
                         Some(target) if self.enabled(target) => IDC_HAND,
                         Some(_) => IDC_ARROW,
+                        None if self.quick_contains(x, y) => IDC_ARROW,
                         None if self.in_text(x, y) => IDC_IBEAM,
                         // Windows has no grab cursor; the hand reads as one.
                         None if self.l.well.contains(x, y)
@@ -6897,6 +6933,35 @@ pub fn render_offscreen(
             })
             .map_err(fail)?;
     }
+    // `--select text`: a label placed in memory and selected under Select,
+    // with its quick format bar.
+    let label = if select == Some("text") {
+        let snapshot = session.snapshot();
+        let create = captures_app::editor_session::TextCreate {
+            point: Point {
+                x: snapshot.document.width / 2.,
+                y: snapshot.document.height / 2.,
+            },
+            text: "Quick format".into(),
+            font_size: 32.,
+            font_family: "sans".into(),
+            color: snapshot.initial_annotation_style.color.clone(),
+            style_preset: Some(text::NEW_TEXT_PRESET.into()),
+            drop_shadow: None,
+            drop_shadow_style: None,
+        };
+        session
+            .execute(Request::CreateText { create })
+            .map_err(fail)?;
+        session
+            .snapshot()
+            .document
+            .elements
+            .last()
+            .map(|e| e.base().id.clone())
+    } else {
+        None
+    };
     let presented = present(&mut session, &id, &mut Published::default());
     let mode = entry.mode.unwrap_or(CaptureMode::Region);
     let mut editor = Editor::new(
@@ -6912,7 +6977,7 @@ pub fn render_offscreen(
     editor.w = w;
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
-    if let Some(layer) = placed.filter(|_| select != Some("trim")) {
+    if let Some(layer) = placed.filter(|_| select != Some("trim")).or(label) {
         editor.set_selected(Some(layer));
     }
     // `--select export`: the Export settings panel open, with the
@@ -8082,6 +8147,188 @@ mod tests {
         e.set_selected(Some(background));
         e.prepare().unwrap();
         assert!(!e.exists(Target::Expand) && e.expand_shown.is_none());
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+
+    /// The quick format bar floats over a selected label under Select,
+    /// takes presses from the canvas under it, edits through the
+    /// inspector's path and hides under other tools.
+    #[test]
+    fn quick_format_bar_edits_the_selected_label() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-quick-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+                "--select".into(),
+                "text".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let id = e.selected.clone().expect("the placed label");
+        let font = Target::Prop(Prop::Quick(Quick::Font));
+        assert!(e.exists(font) && e.focusable().contains(&font));
+        // Inside the viewport, above the label's selection box.
+        let card = e.quick_client_rect().unwrap();
+        let well = e.l.well;
+        assert!(card.x >= well.x && card.x + card.w <= well.x + well.w);
+        assert!(card.y >= well.y && card.y + card.h <= well.y + well.h);
+        let top = e
+            .selection_outline()
+            .unwrap()
+            .iter()
+            .filter_map(|p| e.to_well(*p))
+            .fold(f32::MAX, |top, (_, y)| top.min(y));
+        assert!(card.y + card.h <= well.y + top);
+        let click = |e: &mut Editor, target: Target| {
+            let r = e.target_rect(target);
+            let (x, y) = (
+                ((r.x + r.w / 2.) * e.scale) as u32,
+                ((r.y + r.h / 2.) * e.scale) as u32,
+            );
+            let at = LPARAM((x | (y << 16)) as isize);
+            assert_eq!(e.hit(r.x + r.w / 2., r.y + r.h / 2.), Some(target));
+            e.handle(WM_LBUTTONDOWN, WPARAM(0), at);
+            assert!(e.gesture.is_none(), "{target:?} started a canvas gesture");
+            e.handle(WM_LBUTTONUP, WPARAM(0), at);
+        };
+        // Bold toggles through the session as the inspector's label edit
+        // (new labels start bold, so this turns it off).
+        let bold = e.selected_text().unwrap().bold;
+        click(&mut e, Target::Prop(Prop::Quick(Quick::Format(0))));
+        assert_eq!(e.selected_text().unwrap().bold, !bold);
+        assert_eq!(e.format_on(0), !bold);
+        assert!(inbox.try_iter().any(|job| matches!(
+            job,
+            Job::Apply(Request::EditText { id: layer, patch })
+                if layer == id && patch.bold == Some(!bold)
+        )));
+        // Larger steps the size ladder: 32 to 36.
+        click(&mut e, Target::Prop(Prop::Quick(Quick::Larger)));
+        assert_eq!(e.selected_text().unwrap().font_size, 36.);
+        assert_eq!(e.number_value(Num::TextSize), 36.);
+        // The gaps between controls still keep presses off the canvas.
+        assert_eq!(e.hit(card.x + 1., card.y + 1.), None);
+        assert!(e.quick_contains(card.x + 1., card.y + 1.));
+        // Another tool hides it.
+        e.select_tool("a");
+        e.prepare().unwrap();
+        assert!(!e.exists(font) && e.quick_client_rect().is_none());
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+
+    /// Committing a label switches to Select with it selected, ready to
+    /// drag; ending it by choosing another tool keeps that tool.
+    #[test]
+    fn committed_text_switches_to_select_with_the_label_selected() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-commit-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let artifact = capture.entry.id.clone();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        // A session of its own stands in for the worker.
+        let mut session = EditorSession::open_with_fonts(
+            open_request(&root_of(&options), &artifact),
+            Some(captures_app::editor_fonts::bundled()),
+        )
+        .unwrap();
+        let mut published = Published::default();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let mut pump = |e: &mut Editor| {
+            while let Ok(job) = inbox.try_recv() {
+                if let Job::Apply(request) = job {
+                    session.execute(request).unwrap();
+                    let presented = present(&mut session, &artifact, &mut published);
+                    e.receive(Outcome::Presented(Box::new(presented)));
+                }
+            }
+        };
+        let (w, h) = e.document_size().unwrap();
+        e.select_tool("t");
+        e.begin_text(Point {
+            x: w / 2.,
+            y: h / 2.,
+        });
+        pump(&mut e);
+        assert!(e.text_active());
+        for unit in "Hi".encode_utf16() {
+            e.text_char(unit);
+        }
+        pump(&mut e);
+        e.finish_text();
+        pump(&mut e);
+        assert!(!e.text_active());
+        assert_eq!(e.tool, "v");
+        assert_eq!(e.selected_text().map(|t| t.text.as_str()), Some("Hi"));
+        e.prepare().unwrap();
+        assert!(e.quick_client_rect().is_some());
+        // Choosing another tool to end a label keeps that tool.
+        e.select_tool("t");
+        e.begin_text(Point {
+            x: w / 4.,
+            y: h / 4.,
+        });
+        pump(&mut e);
+        e.text_char(u16::from(b'A'));
+        e.select_tool("a");
+        pump(&mut e);
+        assert!(!e.text_active());
+        assert_eq!(e.tool, "a");
         drop(e);
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };

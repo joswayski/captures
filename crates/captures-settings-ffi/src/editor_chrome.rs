@@ -137,6 +137,7 @@ fn copy() -> Value {
         "eraser": eraser(),
         "brush_cursor": brush_cursor(),
         "text_format": text_format(),
+        "text_quick_bar": text_quick_bar(),
         "layers": {
             "title": l::TITLE, "add": l::ADD, "hide": l::HIDE, "show": l::SHOW,
             "lock": l::LOCK, "unlock": l::UNLOCK, "menu": l::MENU, "drag": l::DRAG,
@@ -212,6 +213,17 @@ fn text_format() -> Value {
             .map(|(value, label, icon)| json!({"value": value, "label": label, "icon": icon}))
             .collect::<Vec<_>>(),
         "columns": t::COLUMNS, "button_height": t::BUTTON_HEIGHT, "icon": t::ICON,
+    })
+}
+
+/// The selected-text quick format bar (`editor_chrome::text_quick_bar`).
+fn text_quick_bar() -> Value {
+    use chrome::text_quick_bar as q;
+    json!({
+        "label": q::LABEL, "font": q::FONT, "smaller": q::SMALLER, "larger": q::LARGER,
+        "size": q::SIZE, "sizes": q::SIZES, "control": q::CONTROL, "padding": q::PADDING,
+        "gap": q::GAP, "font_width": q::FONT_WIDTH, "size_width": q::SIZE_WIDTH,
+        "offset": q::OFFSET,
     })
 }
 
@@ -475,6 +487,9 @@ mod tests {
             json!({"value": "right", "label": "Align right", "icon": "align-right"})
         );
         assert_eq!(format["columns"], 5);
+        let quick = &result["text_quick_bar"];
+        assert_eq!(quick["larger"], "Larger text");
+        assert_eq!(quick["sizes"][9], 32.);
     }
 
     #[test]

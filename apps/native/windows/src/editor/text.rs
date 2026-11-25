@@ -51,6 +51,10 @@ pub struct Inline {
     in_flight: bool,
     /// Finish was requested (always a commit, as shipping).
     finishing: bool,
+    /// Choosing another tool ended the label: keep that tool afterwards.
+    tool_switch: bool,
+    /// The session's layer for this input, once Begin is accepted.
+    layer_id: Option<String>,
     layout: Option<InlineEditorLayout>,
     element: Option<TextElement>,
     pub field: textfield::Editor,
@@ -402,6 +406,8 @@ impl Editor {
             accepted: element.text.clone(),
             in_flight: true,
             finishing: false,
+            tool_switch: false,
+            layer_id: None,
             layout: editor_text::inline_editor_layout(&element).ok(),
             element: Some(element),
             field,
@@ -427,6 +433,14 @@ impl Editor {
             }
         }
         self.drain_text();
+    }
+
+    /// Another tool was chosen: commit the label and stay on that tool.
+    pub(super) fn finish_text_for_tool(&mut self) {
+        if let Some(inline) = self.inline.as_mut() {
+            inline.tool_switch = true;
+        }
+        self.finish_text();
     }
 
     /// An open label has an IME composition in progress.
@@ -501,6 +515,7 @@ impl Editor {
                 let inline = self.inline.as_mut().expect("inline");
                 inline.started = true;
                 inline.in_flight = false;
+                inline.layer_id = Some(active.layer_id.clone());
                 if let Some(element) = &element {
                     inline.accepted = element.text.clone();
                 }
@@ -517,9 +532,37 @@ impl Editor {
             Some(_) => {}
             // Finished (or another edit ended the input): the committed
             // layer is in the canvas pixels again.
-            None if !inline.in_flight || inline.started => self.close_text(),
+            None if !inline.in_flight || inline.started => self.finished_text(),
             None => {}
         }
+    }
+
+    /// The input ended. A committed label that still exists is ready to
+    /// drag, resize or format like a placed shape: switch to Select with it
+    /// selected, unless another tool was chosen, the editor is closing, or
+    /// something else (a row, the layer card, a paste) took the selection.
+    fn finished_text(&mut self) {
+        let committed = self
+            .inline
+            .as_ref()
+            .filter(|inline| inline.finishing && inline.started && !inline.tool_switch)
+            .and_then(|inline| inline.layer_id.clone());
+        self.close_text();
+        let Some(id) = committed else {
+            return;
+        };
+        if self.closing
+            || self.select_after.is_some()
+            || self.text_element(&id).is_none()
+            || self
+                .selected
+                .as_ref()
+                .is_some_and(|selected| *selected != id)
+        {
+            return;
+        }
+        self.select_tool("v");
+        self.set_selected(Some(id));
     }
 
     /// A worker request failed: keep the typing and allow a retry.

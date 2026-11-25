@@ -7051,16 +7051,17 @@ final class ScreenshotEditorTests: XCTestCase {
         let properties = try XCTUnwrap(descendants(in: controller.root).first {
             $0.accessibilityLabel() == "Layer properties"
         })
-        XCTAssertFalse(properties.isHidden, "finished text exposes its Properties without changing tools")
-        XCTAssertEqual(controller.drawOverlay.shape, .text)
-        XCTAssertTrue(controller.drawOverlay.drawingEnabled)
+        XCTAssertFalse(properties.isHidden, "finished text exposes its Properties")
+        XCTAssertEqual(sections.selectedSegment, 1, "finished text switches to Select, ready to drag")
+        XCTAssertTrue(controller.selectionOverlay.selectionEnabled)
         let content = try textView("Text content", in: properties)
-        XCTAssertTrue(content.isEditable, "the selected text remains editable with Text active")
+        XCTAssertTrue(content.isEditable, "the selected text remains editable under Select")
         XCTAssertTrue(try field("Text size", in: properties).isEnabled)
         XCTAssertEqual(try field("Text size", in: properties).stringValue, "32")
         XCTAssertEqual(try field("New text size", in: controller.root).stringValue, "24",
                        "selected text size does not replace creation defaults")
-        XCTAssertTrue(try field("Shift rotation snap", in: properties).isHidden)
+        XCTAssertFalse(try field("Shift rotation snap", in: properties).isHidden,
+                       "Select shows the transform settings")
         XCTAssertEqual(try field("Properties heading", in: properties).stringValue, "Text")
         try render(controller.root, name: "screenshot-editor-text-properties-no-transform")
         content.string = "Properties edit"
@@ -7119,7 +7120,9 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "latest\nΩ🙂")
             XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
             XCTAssertEqual(controller.drawOverlay.shape, fail ? .text : .arrow)
-            XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
+            // A failed Finish drops the rail choice; the retried commit selects the text.
+            XCTAssertTrue(controller.window.firstResponder
+                === (fail ? controller.selectionOverlay as NSView : controller.drawOverlay))
         }
     }
 
@@ -7176,7 +7179,9 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.completePending(with: snapshot(id: "shot", unsaved: true,
                 layers: [textLayer(id: "fresh", text: "Revised\nline two")]))
             XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
-            XCTAssertFalse(controller.drawOverlay.isHidden, "the canvas must be available before receiving focus")
+            // Committed text switches to Select with the layer selected.
+            XCTAssertFalse(controller.selectionOverlay.isHidden, "the canvas must be available before receiving focus")
+            XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "fresh")
             let finishedCount = worker.requests.count
             let undo = try keyEvent(window: controller.window, keyCode: 6, characters: "z", modifiers: .command)
             if focusElsewhere {
@@ -7184,13 +7189,73 @@ final class ScreenshotEditorTests: XCTestCase {
                 _ = controller.window.performKeyEquivalent(with: undo)
                 XCTAssertEqual(worker.requests.count, finishedCount, "field Undo must remain native")
             } else {
-                XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
+                XCTAssertTrue(controller.window.firstResponder === controller.selectionOverlay)
                 XCTAssertTrue(controller.window.performKeyEquivalent(with: undo))
                 XCTAssertEqual(worker.requests.count, finishedCount + 1)
                 XCTAssertEqual(worker.requests.last?["operation"] as? String, "undo",
                                "the first Undo after Escape must reach document history")
                 worker.completePending(with: snapshot(id: "shot", canRedo: true))
             }
+        }
+    }
+
+    func testCommittedTextSwitchesToSelectWithQuickFormatBar() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let outline: [[String: Double]] = [
+                ["x": 20, "y": 120], ["x": 220, "y": 120], ["x": 220, "y": 168], ["x": 20, "y": 168],
+            ]
+            let fonts = ["sans": "Inter", "mono": "JetBrains Mono"]
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", fonts: fonts))
+            worker.response = { request in
+                let operation = request["operation"] as? String ?? ""
+                var layer = self.textLayer(id: "fresh", text: "Hello there")
+                layer["y"] = 120.0
+                let patch = request["patch"] as? [String: Any]
+                if let size = patch?["fontSize"] as? Double { layer["fontSize"] = size }
+                if let align = patch?["align"] as? String { layer["align"] = align }
+                let active: [String: Any]? = ["begin_text_input", "update_text_input"].contains(operation)
+                    ? ["input_id": request["input_id"] as! String, "layer_id": "fresh", "is_new": true] : nil
+                return self.snapshot(id: "shot", layers: [layer], fonts: fonts, activeTextInput: active,
+                                     extra: ["selection_outlines": ["fresh": outline]])
+            }
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                                                        worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = DrawToolChoice(controller)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            try typeInline("Hello there", in: controller)
+            try finishInlineText(in: controller)
+            waitUntil { controller.selectionOverlay.selectedLayerID == "fresh" }
+            XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1,
+                           "committed text switches to Select, ready to drag like a placed shape")
+            XCTAssertFalse(controller.selectionOverlay.isHidden)
+            XCTAssertTrue(controller.window.firstResponder === controller.selectionOverlay)
+
+            let bar = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorTextQuickBar }.first)
+            XCTAssertFalse(bar.isHiddenOrHasHiddenAncestor, "selected text shows its quick format bar")
+            XCTAssertEqual(bar.accessibilityLabel(), "Text options")
+            let image = controller.presentedImageRect, scale = image.width / 640
+            XCTAssertLessThanOrEqual(bar.frame.maxY, image.minY + 120 * scale, "the bar sits above the text")
+            XCTAssertEqual(bar.fontSize, 32)
+            XCTAssertEqual(bar.font.numberOfItems, fonts.count)
+            try render(controller.root, name: "screenshot-editor-text-quick-bar-\(appearance)")
+
+            bar.larger.pressed?()
+            waitUntil { bar.fontSize == 36 }
+            let resize = try XCTUnwrap(worker.requests.last { $0["operation"] as? String == "edit_text" })
+            XCTAssertEqual((resize["patch"] as? [String: Any])?["fontSize"] as? Double, 36,
+                           "Larger steps 32 to the next ladder size")
+            bar.format.alignButtons[1].button.pressed?()
+            waitUntil { bar.format.align == "center" && !controller.state.busy }
+            let align = try XCTUnwrap(worker.requests.last { $0["operation"] as? String == "edit_text" })
+            XCTAssertEqual((align["patch"] as? [String: Any])?["align"] as? String, "center")
+            XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.align, "center",
+                           "the document follows the bar")
         }
     }
 
@@ -7988,7 +8053,8 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.window.setContentSize(NSSize(width: 1000, height: 600))
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
-        let format = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorTextFormatButtons }.first)
+        let format = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorTextFormatButtons }
+            .first { !($0.superview is EditorTextQuickBar) })
         // Shipping `.screenshot-format-buttons`: B, I, then three alignment icons.
         XCTAssertEqual([format.boldButton, format.italicButton].map { $0.accessibilityLabel() ?? "" }, ["Bold", "Italic"])
         XCTAssertEqual(format.alignButtons.map { $0.button.accessibilityLabel() ?? "" },
@@ -9465,8 +9531,9 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
+        // The quick format bar's size readout shares the inspector's "Text size" name.
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSTextField }
-            .first { $0.accessibilityLabel() == label })
+            .first { $0.accessibilityLabel() == label && !($0.superview is EditorTextQuickBar) })
     }
 
     /// Escape in the inline canvas editor: shipping commits (there is no Done).

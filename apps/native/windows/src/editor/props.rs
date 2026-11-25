@@ -70,6 +70,8 @@ pub enum Prop {
     Filename,
     /// The layer card's Blend mode select.
     Blend,
+    /// A control of the quick format bar over a selected label.
+    Quick(super::quick_bar::Quick),
 }
 
 /// A `NumberInput` in Tool properties.
@@ -979,6 +981,9 @@ impl Editor {
         if Self::in_layer_card(prop) {
             return self.card_prop_rect(prop);
         }
+        if let Prop::Quick(part) = prop {
+            return self.quick_part_rect(part);
+        }
         match prop {
             // In the zoom group, group-relative.
             Prop::Preset => {
@@ -1062,7 +1067,7 @@ impl Editor {
                 let r = self.laid(Row::Aspect)?;
                 Some(Rect::new(r.x, r.y + r.h - SELECT_H, r.w, SELECT_H))
             }
-            Prop::Export(_) | Prop::Filename | Prop::Blend => None,
+            Prop::Export(_) | Prop::Filename | Prop::Blend | Prop::Quick(_) => None,
             Prop::Straighten => {
                 let r = self.laid(Row::Straighten)?;
                 let half = (r.w - self.t.n("s-3")) / 2.;
@@ -1339,6 +1344,7 @@ impl Editor {
     /// A property-style control outside the Properties body.
     pub fn outside_props(prop: Prop) -> bool {
         prop == Prop::Preset
+            || matches!(prop, Prop::Quick(_))
             || Self::in_bg_menu(prop)
             || Self::in_layer_card(prop)
             || Self::in_bar(prop)
@@ -1360,6 +1366,7 @@ impl Editor {
             Prop::Check(check) => self.check_on(check),
             Prop::Mode(i) => self.eraser.mode == MODES[i].0,
             Prop::Format(i) => self.format_on(i),
+            Prop::Quick(part) => return self.quick_pressed(part),
             Prop::Swatch(..)
             | Prop::Range(_)
             | Prop::StyleTrigger
@@ -1415,6 +1422,7 @@ impl Editor {
                 .into(),
             Prop::Textarea => "Text".into(),
             Prop::Format(i) => Editor::format_name(i).into(),
+            Prop::Quick(part) => Editor::quick_name(part).into(),
             Prop::Filename => "Saved filename".into(),
             Prop::Blend => captures_app::editor_layers::menu::BLEND_MODE.into(),
             Prop::Export(ex) => match ex {
@@ -1535,6 +1543,7 @@ impl Editor {
             Prop::Straighten => self.straighten(),
             Prop::Step(num, up) => self.nudge(num, up),
             Prop::Format(i) => self.activate_format(i),
+            Prop::Quick(part) => self.activate_quick(part),
             Prop::Range(_) | Prop::Number(_) | Prop::Textarea | Prop::Filename => {}
         }
     }
@@ -2013,9 +2022,11 @@ impl Editor {
                 }
                 // `.screenshot-editor-zoom-presets { outline: none }`.
                 Prop::Step(..) | Prop::Preset => Ok(()),
+                Prop::Quick(part) => self.draw_quick_part(dc, part, layer, (w, h)),
             };
         }
         match prop {
+            Prop::Quick(part) => self.draw_quick_part(dc, part, layer, (w, h))?,
             Prop::StyleTrigger => self.draw_style_trigger(dc, layer, (w, h))?,
             Prop::Font => self.draw_select(dc, MenuKind::Font, layer, (w, h))?,
             Prop::Aspect => self.draw_select(dc, MenuKind::Aspect, layer, (w, h))?,

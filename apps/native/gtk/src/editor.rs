@@ -49,6 +49,7 @@ mod layer_menu;
 pub(crate) mod properties;
 mod sidebar_resize;
 mod text;
+mod text_quick_bar;
 pub use text::register_fonts;
 
 /// Shipping's layer clipboard marker type.
@@ -337,6 +338,10 @@ struct State {
     text_field: text::TextField,
     inline: RefCell<Option<text::Inline>>,
     input_counter: Cell<u64>,
+    /// The quick format bar over a selected text layer under Select.
+    quick_bar: text_quick_bar::QuickBar,
+    /// The layer the quick bar shows, while it is shown.
+    quick_for: RefCell<Option<String>>,
     properties: properties::Properties,
     /// The pointer over the canvas, for the brush ring and wheel zoom.
     pointer: Cell<Option<(f64, f64)>>,
@@ -831,6 +836,8 @@ pub fn build(
     expand_action.add_css_class("editor-expand-action");
     expand_action.set_visible(false);
     text_overlay.add_overlay(&expand_action);
+    let quick_bar = text_quick_bar::QuickBar::new();
+    text_overlay.add_overlay(&quick_bar.root);
     text_overlay.set_hexpand(true);
     body.append(&text_overlay);
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1111,6 +1118,8 @@ pub fn build(
         text_field,
         inline: RefCell::default(),
         input_counter: Cell::default(),
+        quick_bar,
+        quick_for: RefCell::default(),
         last_press: Cell::default(),
         layer_marker: RefCell::default(),
         gesture_frame: RefCell::default(),
@@ -1552,7 +1561,7 @@ impl State {
 
     fn select_tool(&self, key: &str) {
         if self.text_active() {
-            self.finish_text();
+            self.finish_text_for_tool();
         }
         let shape = SHAPE_TOOLS.iter().find(|tool| tool.key == key);
         if let Some(shape) = shape {
@@ -1599,6 +1608,116 @@ impl State {
             .map(|p| p.font_families.clone())
             .unwrap_or_default();
         self.properties.show(&self.tool.borrow(), element, &fonts);
+        drop((presented, selected));
+        self.sync_quick_bar();
+    }
+
+    /// The text layer the quick format bar is for: the selected unlocked,
+    /// visible text layer under Select, while no inline input is open and
+    /// nothing is being dragged.
+    fn quick_bar_id(&self) -> Option<String> {
+        if *self.tool.borrow() != "v"
+            || self.text_active()
+            || self.gesture.borrow().is_some()
+            || self.gesture_frame.borrow().is_some()
+        {
+            return None;
+        }
+        let id = self.selected.borrow().clone()?;
+        let presented = self.presented.borrow();
+        presented
+            .as_ref()?
+            .document
+            .elements
+            .iter()
+            .any(|element| {
+                matches!(element, Element::Text(text)
+                    if text.base.id == id && !text.base.locked && text.base.visible)
+            })
+            .then_some(id)
+    }
+
+    /// Show, fill or hide the quick bar (outside a snapshot).
+    fn sync_quick_bar(&self) {
+        let id = self.quick_bar_id();
+        let target = id.as_ref().and_then(|id| {
+            let presented = self.presented.borrow();
+            let presented = presented.as_ref()?;
+            let label = presented
+                .document
+                .elements
+                .iter()
+                .find_map(|element| match element {
+                    Element::Text(text) if text.base.id == *id => Some(text.clone()),
+                    _ => None,
+                })?;
+            Some((label, presented.font_families.clone()))
+        });
+        if let Some((label, fonts)) = &target {
+            self.quick_bar.sync(label, fonts);
+        }
+        let shown = target.is_some();
+        *self.quick_for.borrow_mut() = id.filter(|_| shown);
+        let changed = self.quick_bar.root.is_visible() != shown;
+        if changed {
+            self.quick_bar.root.set_visible(shown);
+        }
+        if shown || changed {
+            // Reallocate through `sync_expand`, which first hides an Expand
+            // canvas action the new tool or selection no longer places; the
+            // overlay would otherwise stretch it over the whole canvas.
+            self.sync_expand();
+        }
+    }
+
+    /// Where the quick bar sits: centred above the layer's selection box
+    /// (and its rotation grip), below it without room, inside the canvas.
+    fn quick_bar_rect(&self) -> Option<gdk::Rectangle> {
+        let id = self.quick_for.borrow().clone()?;
+        let presented = self.presented.borrow();
+        let presented = presented.as_ref()?;
+        let outline = presented.outlines.get(&id).copied()?;
+        let rotation = presented
+            .document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)?
+            .base()
+            .rotation();
+        let mut points = outline
+            .iter()
+            .map(|point| self.to_screen(*point))
+            .collect::<Option<Vec<_>>>()?;
+        if let Some(grip) = captures_app::editor::rotation_handle(
+            outline,
+            rotation,
+            self.display_scale(),
+            presented.document.width,
+            presented.document.height,
+        ) && let Some((x, y)) = self.to_screen(grip.handle)
+        {
+            // The grip's knob, so the bar never covers it.
+            points.extend([(x - 8., y - 8.), (x + 8., y + 8.)]);
+        }
+        let (left, top, right, bottom) = points.iter().fold(
+            (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+            |(l, t, r, b), (x, y)| (l.min(*x), t.min(*y), r.max(*x), b.max(*y)),
+        );
+        let (width, height) = self.quick_bar.size();
+        let [x, y] = editor_chrome::text_quick_bar::place(
+            [left, top, right - left, bottom - top],
+            [f64::from(width), f64::from(height)],
+            [
+                f64::from(self.canvas.width()),
+                f64::from(self.canvas.height()),
+            ],
+        );
+        Some(gdk::Rectangle::new(
+            x.round() as i32,
+            y.round() as i32,
+            width,
+            height,
+        ))
     }
 
     /// A Properties edit for the selected layer. Edits made while the worker
@@ -3179,6 +3298,9 @@ impl State {
                 if child == state.expand_action.upcast_ref::<gtk::Widget>() {
                     return state.expand_rect();
                 }
+                if child == state.quick_bar.root.upcast_ref::<gtk::Widget>() {
+                    return state.quick_bar_rect();
+                }
                 if !state.compare.owns(child) {
                     return state.text_field_rect();
                 }
@@ -3421,6 +3543,13 @@ impl State {
         });
         let weak = Rc::downgrade(self);
         self.properties.inspector.sink.connect(move |edit| {
+            if let Some(state) = weak.upgrade() {
+                state.property_edit(edit);
+            }
+        });
+        // The quick bar edits through the same path as the inspector.
+        let weak = Rc::downgrade(self);
+        self.quick_bar.connect(move |edit| {
             if let Some(state) = weak.upgrade() {
                 state.property_edit(edit);
             }
@@ -4352,6 +4481,16 @@ impl State {
             }
         }
         snapshot.pop();
+        // Gestures, tool and selection changes all redraw: follow them with
+        // the quick bar once the snapshot is done.
+        if self.quick_bar_id() != *self.quick_for.borrow() {
+            let me = self.me.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(state) = me.upgrade() {
+                    state.sync_quick_bar();
+                }
+            });
+        }
         let wanted = expand.and(self.selected.borrow().clone());
         if wanted != *self.expand_for.borrow() {
             // Widgets cannot change during a snapshot.

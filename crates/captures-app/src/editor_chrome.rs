@@ -753,6 +753,101 @@ pub mod text_format {
     pub const ICON: f64 = 14.;
 }
 
+/// The quick format bar that floats over a selected text layer under Select:
+/// Font, Smaller / size / Larger, then the [`text_format`] buttons. It edits
+/// the same fields as the inspector, so the properties panel stays in sync.
+pub mod text_quick_bar {
+    pub const LABEL: &str = "Text options";
+    pub const FONT: &str = "Font";
+    pub const SMALLER: &str = "Smaller text";
+    pub const LARGER: &str = "Larger text";
+    pub const SIZE: &str = "Text size";
+    /// Smaller / Larger walk this ladder (within the 8–512 text size range).
+    pub const SIZES: [f64; 24] = [
+        8., 10., 12., 14., 16., 18., 20., 24., 28., 32., 36., 40., 48., 56., 64., 72., 96., 128.,
+        160., 200., 256., 320., 400., 512.,
+    ];
+    /// Control height; the bar adds [`PADDING`] around one row of controls.
+    pub const CONTROL: f64 = 28.;
+    pub const PADDING: f64 = 4.;
+    /// Gap between controls and around the separators.
+    pub const GAP: f64 = 4.;
+    pub const FONT_WIDTH: f64 = 116.;
+    pub const SIZE_WIDTH: f64 = 36.;
+    /// Space between the bar and the layer's selection box.
+    pub const OFFSET: f64 = 10.;
+
+    /// The next ladder size above or below `current`; `current` itself when
+    /// it is already at that end.
+    #[must_use]
+    pub fn step(current: f64, larger: bool) -> f64 {
+        let next = if larger {
+            SIZES.iter().copied().find(|size| *size > current + 1e-9)
+        } else {
+            SIZES
+                .iter()
+                .rev()
+                .copied()
+                .find(|size| *size < current - 1e-9)
+        };
+        next.unwrap_or(current)
+    }
+
+    /// Where the bar goes, in viewport coordinates (y down): centred above
+    /// the selection box `(x, y, width, height)`, below it when there is no
+    /// room above, and kept inside the viewport.
+    #[must_use]
+    pub fn place(selection: [f64; 4], bar: [f64; 2], viewport: [f64; 2]) -> [f64; 2] {
+        let [x, y, width, height] = selection;
+        let [bar_width, bar_height] = bar;
+        let [view_width, view_height] = viewport;
+        let left = (x + width / 2. - bar_width / 2.).min(view_width - bar_width - OFFSET);
+        let above = y - OFFSET - bar_height;
+        let top = if above >= OFFSET {
+            above
+        } else {
+            (y + height + OFFSET).min(view_height - bar_height - OFFSET)
+        };
+        [left.max(OFFSET), top.max(OFFSET)]
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn steps_walk_the_ladder_from_any_size() {
+            assert_eq!(step(32., true), 36.);
+            assert_eq!(step(32., false), 28.);
+            // An authored size between rungs goes to the neighbouring rung.
+            assert_eq!(step(33., true), 36.);
+            assert_eq!(step(33., false), 32.);
+            assert_eq!(step(512., true), 512.);
+            assert_eq!(step(8., false), 8.);
+            assert_eq!(step(5., true), 8.);
+        }
+
+        #[test]
+        fn place_prefers_above_then_below_and_stays_inside() {
+            // Room above: centred over the selection.
+            assert_eq!(
+                place([200., 200., 100., 40.], [180., 36.], [800., 600.]),
+                [160., 154.]
+            );
+            // Top of the viewport: below the selection instead.
+            assert_eq!(
+                place([200., 20., 100., 40.], [180., 36.], [800., 600.]),
+                [160., 70.]
+            );
+            // Right edge: pulled left to stay inside.
+            assert_eq!(
+                place([760., 200., 100., 40.], [180., 36.], [800., 600.]),
+                [610., 154.]
+            );
+        }
+    }
+}
+
 /// Shipping `DrawToolPreview`: the stroke or brush sample above the drawing
 /// defaults in Properties. Geometry is in the shipping SVG's `0 0 160 72`
 /// view box; hosts fit that box (`preserveAspectRatio` meet) into an

@@ -21,8 +21,8 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::editor::{
-    CUSTOM, Check, ComparePart, Editor, Event, Ex, Field, MenuKind, Note, Num, Prop, Row, Target,
-    with_editor,
+    CUSTOM, Check, ComparePart, Editor, Event, Ex, Field, MenuKind, Note, Num, Prop, Quick, Row,
+    Target, with_editor,
 };
 use crate::scene::Rect;
 
@@ -75,6 +75,10 @@ pub enum Id {
     Note(Note),
     /// `.screenshot-draw-preview-brush` (`role="img" aria-label="Brush preview"`).
     BrushPreview,
+    /// The quick format bar over a selected label (`role="toolbar"`) and
+    /// its size readout.
+    QuickBar,
+    QuickSize,
     /// The open Text style menu (`role="menu"` of `menuitemradio`) or Font
     /// list (`listbox` of options), and its rows.
     Menu,
@@ -239,7 +243,27 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             list
         }
         Id::Canvas if e.text_active() => vec![Id::InlineText],
-        Id::Canvas if e.exists(Target::Expand) => vec![c(Target::Expand)],
+        Id::Canvas => {
+            let mut list = Vec::new();
+            if e.exists(Target::Expand) {
+                list.push(c(Target::Expand));
+            }
+            if e.quick_client_rect().is_some() {
+                list.push(Id::QuickBar);
+            }
+            list
+        }
+        Id::QuickBar if e.quick_client_rect().is_some() => vec![
+            c(Target::Prop(Prop::Quick(Quick::Font))),
+            c(Target::Prop(Prop::Quick(Quick::Smaller))),
+            Id::QuickSize,
+            c(Target::Prop(Prop::Quick(Quick::Larger))),
+            c(Target::Prop(Prop::Quick(Quick::Format(0)))),
+            c(Target::Prop(Prop::Quick(Quick::Format(1)))),
+            c(Target::Prop(Prop::Quick(Quick::Format(2)))),
+            c(Target::Prop(Prop::Quick(Quick::Format(3)))),
+            c(Target::Prop(Prop::Quick(Quick::Format(4)))),
+        ],
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => e
             .prop_order()
             .into_iter()
@@ -257,6 +281,7 @@ fn prop_parent(prop: Prop) -> Id {
         Prop::Mode(_) => Id::ModeGroup,
         Prop::Swatch(field, _) => Id::ColorField(field),
         Prop::Step(num, _) => Id::Control(Target::Prop(Prop::Number(num))),
+        Prop::Quick(_) => Id::QuickBar,
         _ if Editor::in_bar(prop) => Id::Root,
         _ if Editor::in_layer_card(prop) => Id::LayerCard,
         _ => Id::Properties,
@@ -278,7 +303,8 @@ fn parent(e: &Editor, id: Id) -> Option<Id> {
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
         Id::Note(_) | Id::BrushPreview => Id::Properties,
-        Id::InlineText | Id::Control(Target::Expand) => Id::Canvas,
+        Id::InlineText | Id::Control(Target::Expand) | Id::QuickBar => Id::Canvas,
+        Id::QuickSize => Id::QuickBar,
         Id::Rename => Id::Row(e.renaming()?),
         Id::MenuItem(_) => Id::Menu,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
@@ -327,6 +353,8 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::Control(target) => e.target_rect(target),
         Id::LayerCard => e.card_geom().map(|g| g.rect).unwrap_or_default(),
         Id::Compare => e.compare_rect(),
+        Id::QuickBar => e.quick_client_rect().unwrap_or_default(),
+        Id::QuickSize => e.quick_size_rect(),
         Id::BgMenu => e.bg_menu_rect(),
         Id::Menu => e.menu_rect().unwrap_or_default(),
         Id::MenuItem(i) => e.menu_item_rect(i),
@@ -365,9 +393,11 @@ fn name(e: &Editor, id: Id) -> String {
             .unwrap_or_default(),
         Id::BgMenu => editor_chrome::colors::CANVAS_BACKGROUND.into(),
         Id::Compare => captures_app::compression_compare::GROUP_LABEL.into(),
+        Id::QuickBar => editor_chrome::text_quick_bar::LABEL.into(),
+        Id::QuickSize => e.quick_size_name(),
         Id::Menu => match e.open_menu_state() {
             Some((MenuKind::Style, _)) => e.style_label().into(),
-            Some((MenuKind::Font, _)) => "Font".into(),
+            Some((MenuKind::Font | MenuKind::QuickFont, _)) => "Font".into(),
             Some((MenuKind::Aspect, _)) => crate::editor::ASPECT_LABEL.into(),
             Some((MenuKind::Preset, _)) => editor_chrome::header::ZOOM_PRESET.into(),
             Some((MenuKind::Export(ex), _)) => e.prop_name(Prop::Export(ex)),
@@ -391,6 +421,7 @@ fn trigger_kind(id: Id) -> Option<MenuKind> {
     match id {
         Id::Control(Target::Prop(Prop::StyleTrigger)) => Some(MenuKind::Style),
         Id::Control(Target::Prop(Prop::Font)) => Some(MenuKind::Font),
+        Id::Control(Target::Prop(Prop::Quick(Quick::Font))) => Some(MenuKind::QuickFont),
         Id::Control(Target::Prop(Prop::Aspect)) => Some(MenuKind::Aspect),
         Id::Control(Target::Prop(Prop::Preset)) => Some(MenuKind::Preset),
         Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => Some(MenuKind::Export(ex)),
@@ -409,14 +440,15 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
             UIA_ListItemControlTypeId
         }
         Id::MenuItem(_) => UIA_MenuItemControlTypeId,
-        Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset | Prop::Blend)) => {
-            UIA_ComboBoxControlTypeId
-        }
+        Id::Control(Target::Prop(
+            Prop::Font | Prop::Quick(Quick::Font) | Prop::Aspect | Prop::Preset | Prop::Blend,
+        )) => UIA_ComboBoxControlTypeId,
         Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => UIA_ComboBoxControlTypeId,
         Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea | Prop::Filename)) => {
             UIA_EditControlTypeId
         }
         Id::Root => UIA_WindowControlTypeId,
+        Id::QuickBar => UIA_ToolBarControlTypeId,
         Id::Banner
         | Id::CanvasGroup
         | Id::Zoom
@@ -439,9 +471,13 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Control(Target::Prop(Prop::Range(_))) => UIA_SliderControlTypeId,
         Id::Control(Target::Compare(ComparePart::Range)) => UIA_SliderControlTypeId,
         Id::Control(_) => UIA_ButtonControlTypeId,
-        Id::BannerText | Id::LayersTitle | Id::Location | Id::Notice | Id::Hint | Id::Note(_) => {
-            UIA_TextControlTypeId
-        }
+        Id::BannerText
+        | Id::LayersTitle
+        | Id::Location
+        | Id::Notice
+        | Id::Hint
+        | Id::Note(_)
+        | Id::QuickSize => UIA_TextControlTypeId,
         Id::BrushPreview => UIA_ImageControlTypeId,
     }
 }
@@ -493,6 +529,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::CropAction(apply)) => (29, i32::from(apply)),
             Target::Prop(Prop::Preset) => (31, 0),
             Target::Prop(Prop::Straighten) => (32, 0),
+            Target::Prop(Prop::Quick(part)) => (44, part.index()),
         }
     };
     let (kind, a) = match id {
@@ -528,6 +565,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::Compare => (26, 0),
         Id::Note(note) => (27, note as i32),
         Id::BrushPreview => (28, 0),
+        Id::QuickBar => (29, 0),
+        Id::QuickSize => (30, 0),
     };
     // A distinct second part keeps these apart from Preferences' and
     // History's ids; the host provider's prefix keeps windows apart.
@@ -557,6 +596,8 @@ fn offscreen(e: &Editor, id: Id) -> bool {
             let (r, list) = (rect(e, id), e.l.list);
             r.y + r.h <= list.y || r.y >= list.y + list.h
         }
+        // The quick format bar floats over the canvas, not in Properties.
+        Id::Control(Target::Prop(Prop::Quick(_))) => false,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup | Id::Control(Target::Prop(_)) => {
             let (r, view) = (rect(e, id), e.props_view());
             r.y + r.h <= view.y || r.y >= view.y + view.h

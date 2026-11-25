@@ -27,6 +27,9 @@ pub(super) struct Inline {
     in_flight: bool,
     /// Finish was requested (always a commit, as shipping).
     finishing: bool,
+    /// A committed label switches to Select with it selected, unless the
+    /// finish came from choosing another tool.
+    select_after: bool,
     /// The geometry the field draws at, in document units.
     layout: Option<InlineEditorLayout>,
     element: Option<TextElement>,
@@ -207,6 +210,7 @@ impl State {
             accepted: element.text.clone(),
             in_flight: true,
             finishing: false,
+            select_after: true,
             layout: editor_text::inline_editor_layout(&element).ok(),
             element: Some(element.clone()),
         });
@@ -270,6 +274,14 @@ impl State {
             inline.finishing = true;
         }
         self.drain_text();
+    }
+
+    /// Finish because another tool was chosen: that tool stays active.
+    pub(super) fn finish_text_for_tool(&self) {
+        if let Some(inline) = self.inline.borrow_mut().as_mut() {
+            inline.select_after = false;
+        }
+        self.finish_text();
     }
 
     /// Closing with the field open: commit its text on the locked session
@@ -360,10 +372,40 @@ impl State {
             // Finished (or an unrelated edit ended the input): the committed
             // layer is in the canvas pixels again.
             None => {
+                let committed = (inline.finishing && inline.select_after)
+                    .then(|| inline.element.as_ref().map(|e| e.base.id.clone()))
+                    .flatten();
                 drop(slot);
                 self.close_text();
+                if let Some(id) = committed {
+                    self.select_committed_text(&id);
+                }
             }
         }
+    }
+
+    /// Like a placed shape, committed text is ready to drag, resize or
+    /// format: the Text tool hands over to Select with the label selected.
+    /// A blank label the session dropped, another tool chosen meanwhile, or
+    /// another layer selected since leave things as they are. Focus is not
+    /// moved, so a field the user clicked to end the input keeps it.
+    fn select_committed_text(&self, id: &str) {
+        if *self.tool.borrow() != "t"
+            || self
+                .selected
+                .borrow()
+                .as_deref()
+                .is_some_and(|selected| selected != id)
+            || self
+                .text_element(id)
+                .is_none_or(|label| label.text.trim().is_empty())
+        {
+            return;
+        }
+        *self.selected.borrow_mut() = Some(id.to_owned());
+        self.select_tool("v");
+        self.rebuild_selection();
+        self.canvas.queue_draw();
     }
 
     /// A worker request failed: keep the typing and allow a retry.

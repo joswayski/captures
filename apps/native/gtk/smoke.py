@@ -697,12 +697,33 @@ def editor(binary, scratch):
         wait(lambda: not find(app, "text", "Edit text on canvas"), "the field to close")
         print("editor: Text tool typed two lines into a real text field and committed")
 
-        # The committed label is selected; Bold and Align right round-trip.
-        bold = wait(lambda: find(app, "push button", "Bold"), "the text properties")[0]
+        # Committing hands over to Select with the label selected, and the
+        # quick format bar floats over it; its Larger edits like Properties.
+        wait(lambda: has_state(select, Atspi.StateType.PRESSED), "commit to switch to Select")
+        bar = wait(lambda: [n for n, (_, name) in nodes(app) if name == "Text options"],
+                   "the quick format bar")[0]
+        assert_accessible(bar, "the quick format bar")
+        size = wait(lambda: find(app, "spin button", "Size"), "the text properties")[0]
+        before_size = Atspi.Value.get_current_value(size)
+        press(find(bar, "push button", "Larger text")[0])
+        wait(lambda: Atspi.Value.get_current_value(size) > before_size,
+             "the bar's Larger text to grow the label in Properties")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: Atspi.Value.get_current_value(size) == before_size,
+             "Undo to restore the size")
+        print("editor: commit selected the label under Select; the quick bar's Larger is undoable")
+
+        # The committed label is selected; Bold and Align right round-trip in
+        # Properties (the quick bar repeats both buttons; skip its copies).
+        def inspector(name):
+            ours = find(bar, "push button", name)
+            return [n for n in find(app, "push button", name) if n not in ours]
+
+        bold = wait(lambda: inspector("Bold"), "the text properties")[0]
         was_bold = has_state(bold, Atspi.StateType.PRESSED)
         press(bold)
         wait(lambda: has_state(bold, Atspi.StateType.PRESSED) != was_bold, "Bold to toggle")
-        right = find(app, "push button", "Align right")[0]
+        right = inspector("Align right")[0]
         press(right)
         wait(lambda: has_state(right, Atspi.StateType.PRESSED), "Align right to apply")
         print("editor: text Bold and alignment round-tripped through the session")

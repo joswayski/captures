@@ -4251,6 +4251,44 @@ window.captures.recording-controls-window {
 .captures button.editor-expand-action:focus-visible {
   background: var(--theme-accent-hover);
 }
+/* The text quick format bar (`editor_chrome::text_quick_bar`): a solid raised
+ * card inside the editor window, so it follows the appearance setting. */
+.captures .editor-text-quick-bar {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+}
+.captures .editor-text-quick-bar button.quick-bar-button {
+  min-height: 0;
+  min-width: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.captures .editor-text-quick-bar button.quick-bar-button:hover {
+  background: var(--control-hover);
+}
+.captures .editor-text-quick-bar button.quick-bar-button.active {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+}
+.captures .editor-text-quick-bar button.quick-bar-button:disabled {
+  opacity: 0.4;
+}
+.captures .editor-text-quick-bar .quick-bar-font button.select-trigger {
+  min-height: 0;
+  padding: 0 var(--s-3);
+}
+.captures .editor-text-quick-bar .quick-bar-size {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.captures .editor-text-quick-bar separator.quick-bar-separator {
+  min-width: 1px;
+  background: var(--border-subtle);
+}
 /* `.screenshot-drop-overlay`: the glass drop toast with an accent rim; the
  * icon sits 13 px in and the label starts 44 px in. */
 .captures .editor-drop-toast {

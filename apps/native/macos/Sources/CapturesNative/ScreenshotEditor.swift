@@ -1899,6 +1899,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var nextTool: (section: Int, shape: EditorDrawOverlay.Shape?)?
     }
     private var inlineTextInput: InlineTextInput?
+    /// The format bar over a selected text layer under Select.
+    private var textQuickBar: EditorTextQuickBar!
     /// The style last applied to the inline editor's text storage.
     private var inlineTextStyleKey: String?
     private var closeAfterTextInput = false
@@ -3096,6 +3098,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                     displayScale: scale, lockAspect: lockAspect)
         }
         selectionOverlay.onPreview = { [weak self] id, edit in
+            self?.textQuickBar.isHidden = true // Out of the way while dragging.
             guard let self, !self.state.busy,
                   let layer = self.state.snapshot?.layers.first(where: { $0.id == id }),
                   layer.visible, !layer.locked else { return }
@@ -3103,7 +3106,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self.drainDrawingPreview()
         }
         selectionOverlay.onPreviewCancel = { [weak self] in
-            guard let self, self.drawOverlay.startPoint == nil else { return }
+            guard let self else { return }
+            DispatchQueue.main.async { [weak self] in self?.updateTextQuickBar() }
+            guard self.drawOverlay.startPoint == nil else { return }
             self.cancelDrawingPreview()
         }
         selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
@@ -3175,6 +3180,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineFrame.addSubview(inlineTextEditor)
         viewportInput.addSubview(inlineFrame)
         inlineTextFrame = inlineFrame
+        buildTextQuickBar()
         for view in [viewportInput, drawOverlay, selectionOverlay, cropOverlay] { configureViewportGestures(view) }
         drawOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
         selectionOverlay.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
@@ -6134,6 +6140,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 if let tool = current.nextTool {
                     self.activateTool(section: tool.section, shape: tool.shape)
                     self.focusActiveCanvas()
+                } else if commit, !self.closeAfterTextInput, let id = current.layerID,
+                          presentation.snapshot.layers.contains(where: { $0.id == id }) {
+                    // Like a placed shape, committed text is ready to drag,
+                    // resize or format: switch to Select with it selected.
+                    self.activateTool(section: Section.layers, shape: nil)
+                    self.selectCanvasLayer(id)
+                    // Keep a field the user clicked to end the input focused.
+                    let responder = self.window.firstResponder
+                    if responder === self.window || responder === self.drawOverlay
+                        || responder === self.viewportInput {
+                        self.focusActiveCanvas()
+                    }
                 }
                 if self.closeAfterTextInput {
                     self.closeAfterTextInput = false
@@ -6301,6 +6319,88 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textFamily.selectItem(at: textFamily.itemArray.firstIndex {
             $0.representedObject as? String == style.fontFamily
         } ?? 0)
+    }
+
+    /// The quick format bar edits the inspector's text fields, then applies
+    /// them like the inspector does, so both stay in step and each press is
+    /// its own undo step.
+    private func buildTextQuickBar() {
+        let bar = EditorTextQuickBar(tokens: tokens)
+        bar.isHidden = true
+        bar.font.bindChange { [weak self, weak bar] _ in
+            guard let self, let key = bar?.font.selectedItem?.representedObject as? String,
+                  let index = self.textFamily.itemArray.firstIndex(where: {
+                      $0.representedObject as? String == key
+                  }) else { return }
+            self.textFamily.selectItem(at: index)
+            self.textFamilyChanged()
+        }
+        bar.stepped = { [weak self] larger in
+            guard let self, let current = Double(self.textSize.stringValue) else { return }
+            let next = EditorTextQuickBar.step(current, larger: larger)
+            guard next != current else { return }
+            self.textSize.stringValue = self.format(next)
+            self.textControlsChanged(field: nil)
+            self.updateTextQuickBar()
+        }
+        bar.format.changed = { [weak self, weak bar] in
+            guard let self, let bar, let format = self.textFormat else { return }
+            format.bold = bar.format.bold; format.italic = bar.format.italic
+            format.align = bar.format.align
+            self.textControlsChanged(field: nil)
+        }
+        viewportInput.addSubview(bar)
+        textQuickBar = bar
+    }
+
+    /// Show the bar over the selected text layer under Select, mirroring the
+    /// inspector's staged values, above (or below) its selection box.
+    private func updateTextQuickBar() {
+        guard let bar = textQuickBar else { return }
+        guard sectionControl?.selectedSegment == Section.layers, inlineTextInput == nil, !draining,
+              selectionOverlay.startPoint == nil, let snapshot = state.snapshot, snapshot.width > 0,
+              let layer = selectedLayer, layer.kind == .text, layer.visible,
+              let outline = layer.selectionOutline, !outline.isEmpty else {
+            bar.isHidden = true
+            return
+        }
+        let image = presentedImageRect
+        let scale = image.width / CGFloat(snapshot.width)
+        // Include the rotation grip so the bar never covers it.
+        var points = outline
+        if let grip = NativeEditorRotationHandle(outline: outline, radians: layer.rotation, displayScale: Double(scale),
+                                                 canvas: CGSize(width: snapshot.width, height: snapshot.height)) {
+            let r = CGFloat(grip.hitRadius)
+            points += [CGPoint(x: grip.handle.x - r, y: grip.handle.y - r),
+                       CGPoint(x: grip.handle.x + r, y: grip.handle.y + r)]
+        }
+        let xs = points.map { image.minX + $0.x * scale }, ys = points.map { image.minY + $0.y * scale }
+        guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max(),
+              minX.isFinite, minY.isFinite else { bar.isHidden = true; return }
+        let titles = textFamily.itemArray.map(\.title)
+        if bar.font.itemArray.map(\.title) != titles {
+            bar.font.removeAllItems()
+            for item in textFamily.itemArray {
+                bar.font.addItem(withTitle: item.title)
+                bar.font.lastItem?.representedObject = item.representedObject
+            }
+        }
+        bar.font.selectItem(at: textFamily.indexOfSelectedItem)
+        bar.font.isEnabled = textFamily.isEnabled
+        if let size = Double(textSize.stringValue) { bar.fontSize = size }
+        if let format = textFormat {
+            bar.format.bold = format.bold; bar.format.italic = format.italic; bar.format.align = format.align
+            bar.format.isEnabled = format.isEnabled
+        }
+        let bounds = viewportInput.bounds
+        // `text_quick_bar::place`: centred above the box, else below, inside the viewport.
+        let offset = EditorTextQuickBar.offset
+        let size = bar.frame.size
+        let left = min(max(offset, (minX + maxX) / 2 - size.width / 2), bounds.width - size.width - offset)
+        let above = minY - offset - size.height
+        let top = above >= offset ? above : min(maxY + offset, bounds.height - size.height - offset)
+        bar.frame.origin = NSPoint(x: max(offset, left), y: max(offset, top))
+        bar.isHidden = false
     }
 
     /// Shipping applies text properties as they change. A typing burst in one
@@ -6658,6 +6758,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         recenterButton?.isHidden = editedImage == nil
             || !EditorChrome.canvasOffscreen(viewport: viewportInput.bounds, canvas: presentedImageRect)
         updateInlineTextFrame()
+        updateTextQuickBar()
         publishZoomPreset()
         drawOverlay.needsDisplay = true; selectionOverlay.needsDisplay = true
         cropOverlay.needsDisplay = true
@@ -6767,16 +6868,25 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                            options: [.usesLineFragmentOrigin])
         // Auto-width labels grow with the buffer before the session refits
         // them; the accepted box keeps its left edge, centre or right edge.
-        let contentWidth = layout.autoWidth ? ceil(bounds.width) + 2 : acceptedWidth
+        // Size every keystroke with the session's own fit (`fit_auto_width`:
+        // the widest line plus 0.35em, or 8em while blank) and never swap to
+        // the accepted frame, so the box and plate do not shrink on each key
+        // and grow back when the session answers.
+        let contentWidth: CGFloat
+        if layout.autoWidth {
+            let size = layout.fontSize
+            let minimum = max(8, (size * 0.5).rounded())
+            let blank = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let fitted = blank ? max(minimum, (size * 8).rounded())
+                : max(minimum, ceil(bounds.width / scale + size * 0.35))
+            contentWidth = fitted * scale
+        } else {
+            contentWidth = acceptedWidth
+        }
         let trailingLine: CGFloat = text.hasSuffix("\n") ? lineHeight : 0
         let contentHeight = max(lineHeight, ceil(bounds.height) + trailingLine)
-        // Accepted layout already carries the worker's measured world centre.
-        // Local sizing is only for the unaccepted typing buffer / pending Begin.
-        let accepted = snapshot.activeTextLayout != nil
-            && snapshot.activeTextInput?.inputID == inlineTextInput?.inputID
-            && text == inlineTextInput?.acceptedText
-        let width = accepted ? layout.frame.width * scale : contentWidth + pad[1] + pad[3]
-        let height = accepted ? layout.frame.height * scale : contentHeight + pad[0] + pad[2]
+        let width = contentWidth + pad[1] + pad[3]
+        let height = contentHeight + pad[0] + pad[2]
         let acceptedLeft = image.minX + layout.frame.minX * scale
         let acceptedRight = acceptedLeft + layout.frame.width * scale
         let left: CGFloat
@@ -6864,6 +6974,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
            !controlsBusy, inputResolved, !importLoading {
             focusActiveCanvas()
         }
+        updateTextQuickBar()
     }
 
     /// Properties for the selected layer, top to bottom: the heading, then
@@ -8013,6 +8124,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             slider?.tokens = tokens
         }
         textFormat?.tokens = tokens
+        textQuickBar?.tokens = tokens
         for swatches in [drawingStrokeColor, drawingFillColor, textColor, textPlateColor] {
             swatches?.tokens = tokens
         }
