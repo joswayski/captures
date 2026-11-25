@@ -505,13 +505,15 @@ Capture, then "Installing Update…" or "Restarting Captures…" (disabled), and
 "Checking for Updates…" in place; the tooltip reads "Captures — Update
 available" or "Captures — Installing update". Not now/Close hide it (not while
 downloading or restarting); release notes follow the Preferences
-`show_update_changelog` switch, with no toggle on the notice. Update / Try again / Check again run the same steps as the Updates card,
+`show_update_changelog` switch, with no toggle on the notice; a list taller
+than the card scrolls with the wheel under a 4 DIP thumb and fades out at
+whichever edge has more to read. Update / Try again / Check again run the same steps as the Updates card,
 View release, pull request numbers and "download from captur.es" open the
 browser, and progress, restart and error states update in place. Its parts are
 exposed through `panel_uia.rs` (heading, status/alert lines, invokable
 buttons). Render it with `--scene update --update
-available|single|closing|manual|downloading|restarting|error|checking|up-to-date
-[--tool fallback] [--select notes-hidden] --screenshot PATH`, or without
+available|highlights|long|single|closing|manual|downloading|restarting|error|checking|up-to-date
+[--tool fallback] [--select notes-hidden|notes-scrolled] --screenshot PATH`, or without
 `--screenshot` as a live notice by the notification area until Not now/Close
 (its buttons reach no worker). It pops in with shipping's `ui-pop-in` and,
 once restarting, fades up and out after 3 s (a failed restart puts it back);

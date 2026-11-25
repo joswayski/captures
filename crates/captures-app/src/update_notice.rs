@@ -1252,9 +1252,10 @@ const FIXTURE_STEPS: u64 = 6;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 
 /// Workbench fixture names accepted by [`fixture`].
-pub const FIXTURES: [&str; 10] = [
+pub const FIXTURES: [&str; 11] = [
     "available",
     "highlights",
+    "long",
     "single",
     "closing",
     "manual",
@@ -1322,8 +1323,9 @@ fn available_fixture(stacked: bool, closing: bool, installable: bool) -> UpdateS
     }
 }
 
-/// Three releases written as AI highlights (`Title — description`).
-fn highlights_fixture() -> UpdateStatus {
+/// Three releases written as AI highlights (`Title — description`); `long`
+/// adds three more skipped releases, so the list scrolls.
+fn highlights_fixture(long: bool) -> UpdateStatus {
     let entry = |version: &str, display: &str, notes: &[&str]| ChangelogEntry {
         version: version.into(),
         display_version: display.into(),
@@ -1336,7 +1338,7 @@ fn highlights_fixture() -> UpdateStatus {
                 .join("\n")
         )),
     };
-    let changelog = vec![
+    let mut changelog = vec![
         entry(
             "2026.11.2203",
             "2026.11.22.3",
@@ -1360,9 +1362,40 @@ fn highlights_fixture() -> UpdateStatus {
             ],
         ),
     ];
+    if long {
+        changelog.extend([
+            entry(
+                "2026.11.2110",
+                "2026.11.21.10",
+                &[
+                    "Recordings keep their real timing — Videos now play back at the speed you recorded them, even when frames arrive late.",
+                    "Faster Windows recording — Captures records through your graphics card's H.264 encoder when it has one.",
+                ],
+            ),
+            entry(
+                "2026.11.2109",
+                "2026.11.21.9",
+                &[
+                    "Drag previews out three ways — Pick between Frosted imprint, Dock gap and Quiet well under Preferences.",
+                ],
+            ),
+            entry(
+                "2026.11.2108",
+                "2026.11.21.8",
+                &[
+                    "Red flags for taken shortcuts — If another app already claims your shortcut, the recorder turns red with a warning.",
+                ],
+            ),
+        ]);
+    }
     UpdateStatus::Available {
-        current_version: "2026.11.2110".into(),
-        current_display_version: "2026.11.21.10".into(),
+        current_version: if long { "2026.11.2107" } else { "2026.11.2110" }.into(),
+        current_display_version: if long {
+            "2026.11.21.7"
+        } else {
+            "2026.11.21.10"
+        }
+        .into(),
         version: "2026.11.2203".into(),
         display_version: "2026.11.22.3".into(),
         notes: changelog[0].notes.clone(),
@@ -1380,7 +1413,8 @@ pub fn fixture(name: &str) -> Option<UpdateStatus> {
     let current_display_version = FIXTURE_CURRENT.1.to_owned();
     Some(match name {
         "available" => available_fixture(true, false, true),
-        "highlights" => highlights_fixture(),
+        "highlights" => highlights_fixture(false),
+        "long" => highlights_fixture(true),
         "single" => available_fixture(false, false, true),
         "closing" => available_fixture(true, true, true),
         "manual" => available_fixture(false, false, false),

@@ -245,7 +245,7 @@ struct UpdateNoticePlacement: Equatable {
 /// Only opt-in live acquisition downloads; neither source installs or relaunches.
 final class UpdateNoticeModel {
     /// Matches `captures_app::update_notice::FIXTURES`.
-    static let fixtures = ["available", "highlights", "single", "closing", "manual", "downloading",
+    static let fixtures = ["available", "highlights", "long", "single", "closing", "manual", "downloading",
                            "restarting", "error", "checking", "up-to-date"]
     private let transport: UpdateNoticeTransport
     private var checkedPresentation: [String: Any]?

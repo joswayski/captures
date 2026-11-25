@@ -1206,6 +1206,28 @@ fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, amount: f32) -> D2D1_COLOR_F {
     }
 }
 
+/// A scroller's edge fade: `color` at the outer edge (`top` or bottom) to
+/// transparent at the inner one, as 1 DIP solid bands on a smooth ramp
+/// (no gradient brush, which Wine paints opaque).
+fn edge_fade(dc: &ID2D1DeviceContext, r: D2D_RECT_F, color: D2D1_COLOR_F, top: bool) -> Result<()> {
+    let height = r.bottom - r.top;
+    let bands = height.ceil().max(1.) as usize;
+    for i in 0..bands {
+        let from = i as f32;
+        let to = (from + 1.).min(height);
+        // Opaque at the edge, easing out toward the list.
+        let t = 1. - (from + to) / 2. / height;
+        let alpha = color.a * t * t * (3. - 2. * t);
+        let band = if top {
+            rect(r.left, r.top + from, r.right, r.top + to)
+        } else {
+            rect(r.left, r.bottom - to, r.right, r.bottom - from)
+        };
+        gfx::fill(dc, band, D2D1_COLOR_F { a: alpha, ..color })?;
+    }
+    Ok(())
+}
+
 fn fade(mut color: D2D1_COLOR_F, enabled: bool) -> D2D1_COLOR_F {
     if !enabled {
         // `button:disabled { opacity: 0.45 }`
@@ -2222,6 +2244,43 @@ pub fn paint(
             }
             unsafe { dc.PopAxisAlignedClip() };
             result?;
+            if scroll_max > 0. {
+                // Long notes fade out at whichever edge has more to read,
+                // under a thin thumb in the gutter, like History's.
+                let under = c(if update {
+                    "surface-raised"
+                } else {
+                    "surface-sunken"
+                });
+                let edge = s6.min((view.bottom - view.top) / 4.);
+                if scroll > 0. {
+                    edge_fade(
+                        dc,
+                        rect(view.left, view.top, view.right, view.top + edge),
+                        under,
+                        true,
+                    )?;
+                }
+                if scroll < scroll_max {
+                    edge_fade(
+                        dc,
+                        rect(view.left, view.bottom - edge, view.right, view.bottom),
+                        under,
+                        false,
+                    )?;
+                }
+                let track = view.bottom - view.top;
+                let natural = track + scroll_max;
+                let thumb_h = (track * track / natural).max(18.).min(track);
+                let thumb_y = view.top + (track - thumb_h) * scroll / scroll_max;
+                let thumb_x = view.right + ((section.right - view.right) - 4.).max(0.) / 2.;
+                gfx::fill_round(
+                    dc,
+                    rect(thumb_x, thumb_y, thumb_x + 4., thumb_y + thumb_h),
+                    2.,
+                    c("border-strong"),
+                )?;
+            }
         }
     }
     let sunken_box = |y: f32, content: f32| -> Result<D2D_RECT_F> {
@@ -2585,7 +2644,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
 
 /// `--scene update --update NAME`: the shared fixture on the canvas, above a
 /// tray icon at the bottom right (`--tool fallback`: no icon, the caretless
-/// corner). `--select notes-hidden` collapses What's new.
+/// corner). `--select notes-hidden` collapses What's new; `notes-scrolled`
+/// scrolls the list part way down.
 pub fn render_offscreen(
     options: &crate::Options,
     g: Gfx,
@@ -2609,10 +2669,16 @@ pub fn render_offscreen(
         move |height: f64| notice::placement(screen, work, tray, false, notice::CARD_WIDTH, height);
     let placement = place(presentation.card_height);
     debug_assert!(tray.is_none() || placement.caret == Caret::Bottom);
+    // `--select notes-scrolled`: the list scrolled part way down.
+    let scroll = if options.select.as_deref() == Some("notes-scrolled") {
+        120.
+    } else {
+        0.
+    };
     Ok(move |dc: &ID2D1DeviceContext| {
         let ui = Ui {
             hover: None,
-            scroll: 0.,
+            scroll,
             time: 0.,
             restart: 1.,
             link: 0.,

@@ -3630,6 +3630,35 @@ window.captures.notice-window {
   border-radius: 0;
   background: none;
 }
+/* Long notes fade out at whichever edge has more to read (GTK shows an
+   undershoot only there), into the card or the sunken box behind them. */
+.captures .update-notes-scroll undershoot.top,
+.captures .update-notes-scroll undershoot.bottom {
+  background-repeat: no-repeat;
+  background-size: 100% var(--s-6);
+}
+.captures .update-notes-scroll undershoot.top {
+  background-image: linear-gradient(
+    to bottom,
+    var(--surface-sunken),
+    alpha(var(--surface-sunken), 0)
+  );
+  background-position: top;
+}
+.captures .update-notes-scroll undershoot.bottom {
+  background-image: linear-gradient(to top, var(--surface-sunken), alpha(var(--surface-sunken), 0));
+  background-position: bottom;
+}
+.captures .update-notice-update .update-notes-scroll undershoot.top {
+  background-image: linear-gradient(
+    to bottom,
+    var(--surface-raised),
+    alpha(var(--surface-raised), 0)
+  );
+}
+.captures .update-notice-update .update-notes-scroll undershoot.bottom {
+  background-image: linear-gradient(to top, var(--surface-raised), alpha(var(--surface-raised), 0));
+}
 /* One list: older releases continue it without a rule between them. */
 .captures .update-notice-update .update-notes-group + .update-notes-group {
   margin-top: var(--s-4);
