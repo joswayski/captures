@@ -2222,25 +2222,56 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Called on the main thread whenever `presentArtifactIDs` changes.
     var presenceChanged: (Set<String>) -> Void = { _ in }
     /// Called on the main thread with the canvas as shown, including drawing
-    /// previews, at most `canvasPublishInterval` apart, so the capture's mini
-    /// preview follows the edit live.
+    /// previews, at mini preview size, so the capture's card follows the edit
+    /// live.
     var canvasChanged: (String, NSImage) -> Void = { _, _ in }
     /// Called on the main thread after a draft write for this capture, so its
     /// mini preview drag exports the saved edits.
     var draftSaved: (String) -> Void = { _ in }
-    static let canvasPublishInterval: TimeInterval = 1.0 / 30
     private var pendingCanvas: (artifactID: String, image: NSImage)?
+    private var canvasScaling = false
 
+    /// Scale each shown frame for the card off the main thread, one at a
+    /// time; frames shown meanwhile collapse into the newest.
     private func canvasShown(_ image: NSImage?) {
         guard let image, let artifactID = state.artifactID else { return }
-        let scheduled = pendingCanvas != nil
         pendingCanvas = (artifactID, image)
-        guard !scheduled else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.canvasPublishInterval) { [weak self] in
-            guard let self, let canvas = self.pendingCanvas else { return }
-            self.pendingCanvas = nil
-            self.canvasChanged(canvas.artifactID, canvas.image)
+        publishCanvas()
+    }
+
+    private func publishCanvas() {
+        guard !canvasScaling, let canvas = pendingCanvas else { return }
+        pendingCanvas = nil
+        guard let source = canvas.image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        canvasScaling = true
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            let thumbnail = Self.cardThumbnail(source)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.canvasScaling = false
+                if let thumbnail {
+                    self.canvasChanged(canvas.artifactID, NSImage(cgImage: thumbnail,
+                        size: NSSize(width: thumbnail.width, height: thumbnail.height)))
+                }
+                self.publishCanvas()
+            }
         }
+    }
+
+    /// The frame within 568 × 320 pixels, as the History thumbnail a card
+    /// starts from, so the card never redraws a full-size screenshot.
+    private static func cardThumbnail(_ image: CGImage) -> CGImage? {
+        let scale = min(1, 568 / CGFloat(image.width), 320 / CGFloat(image.height))
+        let width = max(1, Int((CGFloat(image.width) * scale).rounded()))
+        let height = max(1, Int((CGFloat(image.height) * scale).rounded()))
+        guard scale < 1 else { return image }
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
     /// Called on the main thread after a close finishes with nothing queued
     /// to reopen; the owner releases this controller and builds a new one on

@@ -139,6 +139,9 @@ enum Job {
     /// Write the draft in the background, `DraftAutosave::DELAY` after an
     /// edit, as the Windows and macOS editors do.
     Autosave,
+    /// The shape, stroke or move being drawn for the capture's mini preview
+    /// card, or (`None`) the session's pixels again; replies `Card`.
+    CardPreview(Option<Request>),
 }
 
 enum ImportSource {
@@ -151,6 +154,8 @@ enum Outcome {
     /// Images were imported; select the last new layer.
     Imported(Box<Presented>, String),
     Preview(Result<GestureFrame, String>),
+    /// `Job::CardPreview`'s frame at mini preview size, if it rendered.
+    Card(Option<RgbaImage>),
     Saved(
         Result<
             (
@@ -304,8 +309,10 @@ type LayerRowKey = (
 /// Set after construction, once the editor state can be captured.
 type PresetHandler = Rc<RefCell<Option<Box<dyn Fn(String)>>>>;
 
-/// Takes each new canvas texture (`Editor::connect_canvas_changed`).
+/// Takes each new canvas texture (`Editor::connect_card`).
 type CanvasChanged = Box<dyn Fn(&gdk::Texture)>;
+/// Whether the capture has a mini preview card (`Editor::connect_card`).
+type CardShown = Box<dyn Fn() -> bool>;
 
 pub struct Editor {
     pub window: gtk::ApplicationWindow,
@@ -352,6 +359,13 @@ struct State {
     pointer: Cell<Option<(f64, f64)>>,
     /// A brush preview is rendering; newer strokes wait for it.
     preview_busy: Cell<bool>,
+    /// A mini preview card frame of the drawing is with the worker, another
+    /// is due after it, and the card shows one.
+    card_busy: Cell<bool>,
+    card_dirty: Cell<bool>,
+    card_previewed: Cell<bool>,
+    /// Whether the capture has a mini preview card to follow the drawing.
+    card_shown: RefCell<CardShown>,
     queued: RefCell<std::collections::VecDeque<(Option<String>, Request)>>,
     /// The open Add images chooser; GtkNativeDialog does not keep itself alive.
     #[allow(deprecated)]
@@ -587,6 +601,14 @@ pub fn build(
                         } => Outcome::Saved(
                             editor_export::publish(&root, &session.pixels(), &plan, options, mode)
                                 .map(|saved| (plan, saved)),
+                        ),
+                        // The canvas keeps its texture; only the card sees this.
+                        Job::CardPreview(request) => Outcome::Card(
+                            match request {
+                                Some(request) => session.preview_drawing(request).ok(),
+                                None => Some(session.pixels()),
+                            }
+                            .map(|frame| captures_history::live_thumbnail(&frame)),
                         ),
                         Job::Autosave => {
                             if let Err(error) = session.execute(Request::AutosaveDraft {
@@ -1142,6 +1164,10 @@ pub fn build(
         properties,
         pointer: Cell::default(),
         preview_busy: Cell::default(),
+        card_busy: Cell::default(),
+        card_dirty: Cell::default(),
+        card_previewed: Cell::default(),
+        card_shown: RefCell::new(Box::new(|| false)),
         queued: RefCell::default(),
         chooser: RefCell::default(),
         estimate: Cell::default(),
@@ -1222,9 +1248,16 @@ impl Editor {
         self.window.present();
     }
 
-    /// Follow the canvas as shown, brush and layer drag previews included.
-    pub fn connect_canvas_changed(&self, f: impl Fn(&gdk::Texture) + 'static) {
-        *self.state.canvas_changed.borrow_mut() = Box::new(f);
+    /// Follow the canvas as shown on the capture's mini preview card, which
+    /// exists while `shown` is true: every committed frame, and new shapes,
+    /// strokes and moves while they are drawn.
+    pub fn connect_card(
+        &self,
+        shown: impl Fn() -> bool + 'static,
+        changed: impl Fn(&gdk::Texture) + 'static,
+    ) {
+        *self.state.card_shown.borrow_mut() = Box::new(shown);
+        *self.state.canvas_changed.borrow_mut() = Box::new(changed);
     }
 
     /// Preferences changed the appearance or accent: draw with `tokens` from
@@ -2188,6 +2221,15 @@ impl State {
                 self.refresh_properties();
                 self.received_text();
                 self.canvas.queue_draw();
+            }
+            Outcome::Card(frame) => {
+                self.card_busy.set(false);
+                if let Some(frame) = frame {
+                    (self.canvas_changed.borrow())(&texture_of(&frame));
+                }
+                if self.card_dirty.replace(false) {
+                    self.preview_card();
+                }
             }
             Outcome::Preview(result) => {
                 self.preview_busy.set(false);
@@ -3705,6 +3747,7 @@ impl State {
             }
             (_, "Escape") => {
                 let gesture = self.gesture.borrow_mut().take();
+                self.settle_card();
                 if matches!(gesture, Some(Gesture::Layer { .. })) {
                     self.preview_dirty.set(false);
                     self.restore_frame();
@@ -3948,6 +3991,7 @@ impl State {
             None => return,
         }
         drop(gesture);
+        self.preview_card();
         self.canvas.queue_draw();
     }
 
@@ -3957,9 +4001,6 @@ impl State {
         };
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
         let moved = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y) * scale >= 3.;
-        let defaults = &self.properties.inspector.defaults.values;
-        let style = defaults.style.borrow().clone();
-        let opacity = defaults.opacity.get();
         let request = match gesture {
             Gesture::Pan { .. } => None,
             Gesture::Layer { start, current, .. } if !moved(start, current) => {
@@ -3982,14 +4023,7 @@ impl State {
                 },
             }),
             Gesture::Move { .. } => None,
-            Gesture::Freehand(points) if points.len() >= 2 => Some(Request::CreateFreehandPath {
-                create: FreehandPathCreate {
-                    points,
-                    style,
-                    opacity,
-                },
-            }),
-            Gesture::Freehand(_) => None,
+            gesture @ Gesture::Freehand(_) => self.drawing_request(&gesture),
             Gesture::Brush(points) => {
                 self.preview_dirty.set(false);
                 let eraser = &self.properties.eraser;
@@ -4003,36 +4037,96 @@ impl State {
             Gesture::Shape { start, end, .. } if !moved(start, end) => None,
             // The rectangle stays staged for Apply crop.
             Gesture::Crop(_) => None,
-            Gesture::Shape { tool, start, end } => {
-                if let Some(shape) = closed_kind(&tool) {
-                    Some(Request::CreateClosedShape {
-                        create: ClosedShapeCreate {
-                            shape,
-                            start,
-                            end,
-                            style,
-                            opacity,
-                        },
-                    })
-                } else {
-                    open_kind(&tool).map(|shape| Request::CreateOpenShape {
-                        create: OpenShapeCreate {
-                            shape,
-                            start,
-                            end,
-                            style,
-                            opacity,
-                        },
-                    })
-                }
-            }
+            gesture @ Gesture::Shape { .. } => self.drawing_request(&gesture),
         };
+        // The commit's frame replaces a card preview; nothing else does.
+        if request.is_some() {
+            self.card_dirty.set(false);
+            self.card_previewed.set(false);
+        } else {
+            self.settle_card();
+        }
         if let Some(request) = request {
             *self.notice.borrow_mut() = None;
             self.submit(request);
         }
         self.sync_cursor();
         self.canvas.queue_draw();
+    }
+
+    /// The new shape or stroke being drawn, as its commit would create it.
+    fn drawing_request(&self, gesture: &Gesture) -> Option<Request> {
+        let defaults = &self.properties.inspector.defaults.values;
+        let style = defaults.style.borrow().clone();
+        let opacity = defaults.opacity.get();
+        match gesture {
+            Gesture::Freehand(points) if points.len() >= 2 => Some(Request::CreateFreehandPath {
+                create: FreehandPathCreate {
+                    points: points.clone(),
+                    style,
+                    opacity,
+                },
+            }),
+            Gesture::Shape { tool, start, end } => match closed_kind(tool) {
+                Some(shape) => Some(Request::CreateClosedShape {
+                    create: ClosedShapeCreate {
+                        shape,
+                        start: *start,
+                        end: *end,
+                        style,
+                        opacity,
+                    },
+                }),
+                None => open_kind(tool).map(|shape| Request::CreateOpenShape {
+                    create: OpenShapeCreate {
+                        shape,
+                        start: *start,
+                        end: *end,
+                        style,
+                        opacity,
+                    },
+                }),
+            },
+            _ => None,
+        }
+    }
+
+    /// The canvas draws new shapes, strokes and moves as vector overlays;
+    /// the capture's mini preview card gets them rendered by the worker, one
+    /// frame at a time, so the card follows the pointer too.
+    fn preview_card(&self) {
+        if self.card_busy.get() {
+            self.card_dirty.set(true);
+            return;
+        }
+        if !(self.card_shown.borrow())() {
+            return;
+        }
+        let request = match &*self.gesture.borrow() {
+            // The card only needs the layer where it is now, not snapping.
+            Some(Gesture::Move { id, start, end }) => Some(Request::Layer {
+                id: id.clone(),
+                edit: LayerEdit::DragMove {
+                    delta_x: end.x - start.x,
+                    delta_y: end.y - start.y,
+                    display_scale: self.zoom_percent().unwrap_or(100.) / 100.,
+                },
+            }),
+            Some(gesture) => self.drawing_request(gesture),
+            None => None,
+        };
+        let Some(request) = request else { return };
+        self.card_busy.set(true);
+        self.card_previewed.set(true);
+        let _ = self.jobs.send(Job::CardPreview(Some(request)));
+    }
+
+    /// The drawing ended without an edit: the card shows the canvas again.
+    fn settle_card(&self) {
+        self.card_dirty.set(false);
+        if self.card_previewed.replace(false) {
+            let _ = self.jobs.send(Job::CardPreview(None));
+        }
     }
 
     /// Shipping `toolShowsTransformChrome`: Select and the shape tools.

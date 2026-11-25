@@ -1176,7 +1176,22 @@ def previews(binary, scratch):
         origin_x, origin_y = DESKTOP.origin(editor_window)
         extents = canvas.get_extents(Atspi.CoordType.WINDOW)
         x, y = origin_x + extents.x + 60, origin_y + extents.y + 60
-        DESKTOP.drag(x, y, x + 200, y + 140)
+        if isinstance(DESKTOP, X11):
+            # The card follows the rectangle while the button is still down.
+            subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+            time.sleep(0.2)
+            subprocess.run(["xdotool", "mousedown", "1"], check=True)
+            for step in range(1, 11):
+                subprocess.run(["xdotool", "mousemove", str(x + 20 * step),
+                                str(y + 14 * step)], check=True)
+                time.sleep(0.03)
+            try:
+                wait(lambda: shot() != before, "the card to follow the drawing", 5)
+            finally:
+                subprocess.run(["xdotool", "mouseup", "1"], check=True)
+            print("previews: the card followed a rectangle before release")
+        else:
+            DESKTOP.drag(x, y, x + 200, y + 140)
         wait(lambda: any(name.startswith("Rectangle") for _, (role, name) in nodes(app)
                          if role == "list item"), "a rectangle layer")
         wait(lambda: shot() != before, "the card to show the rectangle", 5)

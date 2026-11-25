@@ -508,6 +508,9 @@ enum Job {
     Preview(Request),
     /// Publish the session's pixels again (a cancelled preview).
     Refresh,
+    /// Show the shape or stroke being drawn on the capture's mini preview
+    /// card, or (`None`) the session's pixels again; replies `CardShown`.
+    CardPreview(Option<Request>),
     /// Decode images and add them as one undoable edit.
     Import {
         source: import::Source,
@@ -546,6 +549,8 @@ enum Outcome {
     ),
     /// The canvas at mini preview size.
     Thumbnail(RgbaImage),
+    /// `Job::CardPreview` went to the card; the next may follow.
+    CardShown,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -758,6 +763,11 @@ pub struct Editor {
     ime: bool,
     /// Selecting text with the pointer.
     text_drag: bool,
+    /// A mini preview card frame of the shape or stroke being drawn is with
+    /// the worker, another is due after it, and the card shows one.
+    card_busy: bool,
+    card_dirty: bool,
+    card_previewed: bool,
     /// A gesture preview is with the worker; another is due after it.
     preview_busy: bool,
     preview_dirty: bool,
@@ -1289,6 +1299,18 @@ fn spawn_worker(
                     Job::Refresh => {
                         Outcome::Presented(Box::new(present(session, &id, &mut published)))
                     }
+                    // Canvas pixels stay as they are: only the card's
+                    // thumbnail thread sees this frame.
+                    Job::CardPreview(request) => {
+                        let frame = match request {
+                            Some(request) => session.preview_drawing(request).ok(),
+                            None => Some(session.pixels()),
+                        };
+                        if let (Some(frame), Some(canvas)) = (frame, &published.canvas) {
+                            let _ = canvas.send(frame);
+                        }
+                        Outcome::CardShown
+                    }
                     Job::Import {
                         source,
                         selected,
@@ -1478,6 +1500,9 @@ impl Editor {
             high_surrogate: None,
             ime: true,
             text_drag: false,
+            card_busy: false,
+            card_dirty: false,
+            card_previewed: false,
             preview_busy: false,
             preview_dirty: false,
             preview_sent: None,
@@ -2211,6 +2236,7 @@ impl Editor {
         }
         self.tool = key;
         self.gesture = None;
+        self.settle_card();
         if key != "c" {
             self.crop = None;
         }
@@ -2642,6 +2668,13 @@ impl Editor {
                 crate::previews::show_edited(&self.artifact_id, &image);
                 return;
             }
+            Outcome::CardShown => {
+                self.card_busy = false;
+                if std::mem::take(&mut self.card_dirty) {
+                    self.preview_card();
+                }
+                return;
+            }
             Outcome::Preview(result) => {
                 self.preview_busy = false;
                 let now = Instant::now();
@@ -2757,6 +2790,7 @@ impl Editor {
         }
         self.closing = true;
         self.gesture = None;
+        self.settle_card();
         if !self.hwnd.is_invalid() {
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_AUTOSAVE);
@@ -2930,6 +2964,7 @@ impl Editor {
                 if let Some(point) = point {
                     *end = point;
                 }
+                self.preview_card();
             }
             Some(Gesture::Move { start, end, .. }) => {
                 if let Some(point) = point {
@@ -2962,10 +2997,77 @@ impl Editor {
                 if let Some(point) = point {
                     points.push(point);
                 }
+                self.preview_card();
             }
             None => return,
         }
         self.overlay_changed();
+    }
+
+    /// The new shape or stroke being drawn, as its commit would create it.
+    fn drawing_request(&self, gesture: &Gesture) -> Option<Request> {
+        let (style, opacity) = self
+            .defaults
+            .as_ref()
+            .map(|d| (d.style.clone(), d.opacity))
+            .unwrap_or_else(|| (ElementStyle::default(), 100.));
+        match gesture {
+            Gesture::Freehand(points) if points.len() >= 2 => Some(Request::CreateFreehandPath {
+                create: FreehandPathCreate {
+                    points: points.clone(),
+                    style,
+                    opacity,
+                },
+            }),
+            Gesture::Shape { tool, start, end } => match closed_kind(tool) {
+                Some(shape) => Some(Request::CreateClosedShape {
+                    create: ClosedShapeCreate {
+                        shape,
+                        start: *start,
+                        end: *end,
+                        style,
+                        opacity,
+                    },
+                }),
+                None => open_kind(tool).map(|shape| Request::CreateOpenShape {
+                    create: OpenShapeCreate {
+                        shape,
+                        start: *start,
+                        end: *end,
+                        style,
+                        opacity,
+                    },
+                }),
+            },
+            _ => None,
+        }
+    }
+
+    /// The canvas draws a new shape or stroke as a local overlay; the
+    /// capture's mini preview card gets it rendered by the worker, one frame
+    /// at a time, so the card follows the pointer too.
+    fn preview_card(&mut self) {
+        if self.card_busy {
+            self.card_dirty = true;
+            return;
+        }
+        if !crate::previews::ids().contains(&self.artifact_id) {
+            return;
+        }
+        let Some(request) = self.gesture.as_ref().and_then(|g| self.drawing_request(g)) else {
+            return;
+        };
+        self.card_busy = true;
+        self.card_previewed = true;
+        let _ = self.jobs.send(Job::CardPreview(Some(request)));
+    }
+
+    /// The drawing ended without an edit: the card shows the canvas again.
+    fn settle_card(&mut self) {
+        self.card_dirty = false;
+        if std::mem::take(&mut self.card_previewed) {
+            let _ = self.jobs.send(Job::CardPreview(None));
+        }
     }
 
     fn finish(&mut self) {
@@ -2991,11 +3093,6 @@ impl Editor {
         self.guides.clear();
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
         let moved = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y) * scale >= DRAG_MIN;
-        let (style, opacity) = self
-            .defaults
-            .as_ref()
-            .map(|d| (d.style.clone(), d.opacity))
-            .unwrap_or_else(|| (ElementStyle::default(), 100.));
         let lock = self.shift_down();
         let request = match gesture {
             Gesture::Pan { .. } => None,
@@ -3048,39 +3145,20 @@ impl Editor {
                 }
                 None
             }
-            Gesture::Freehand(points) if points.len() >= 2 => Some(Request::CreateFreehandPath {
-                create: FreehandPathCreate {
-                    points,
-                    style,
-                    opacity,
-                },
-            }),
-            Gesture::Freehand(_) => None,
+            gesture @ Gesture::Freehand(_) => self.drawing_request(&gesture),
             Gesture::Brush(points) => self.brush_request(points),
             Gesture::Shape { start, end, .. } if !moved(start, end) => None,
             // The rectangle stays staged for Apply crop.
             Gesture::Crop(_) => None,
-            Gesture::Shape { tool, start, end } => match closed_kind(tool) {
-                Some(shape) => Some(Request::CreateClosedShape {
-                    create: ClosedShapeCreate {
-                        shape,
-                        start,
-                        end,
-                        style,
-                        opacity,
-                    },
-                }),
-                None => open_kind(tool).map(|shape| Request::CreateOpenShape {
-                    create: OpenShapeCreate {
-                        shape,
-                        start,
-                        end,
-                        style,
-                        opacity,
-                    },
-                }),
-            },
+            gesture @ Gesture::Shape { .. } => self.drawing_request(&gesture),
         };
+        // The commit's frame replaces a card preview; nothing else does.
+        if request.is_some() {
+            self.card_dirty = false;
+            self.card_previewed = false;
+        } else {
+            self.settle_card();
+        }
         if let Some(request) = request {
             self.held_outline = transformed
                 .filter(|id| self.selected.as_ref() == Some(id))
@@ -3115,6 +3193,7 @@ impl Editor {
         let Some(gesture) = self.gesture.take() else {
             return false;
         };
+        self.settle_card();
         self.guides.clear();
         if matches!(
             gesture,

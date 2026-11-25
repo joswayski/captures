@@ -912,13 +912,24 @@ impl Host {
         // The capture's mini preview follows the edit live.
         let host = Rc::downgrade(self);
         let id = artifact_id.to_owned();
-        editor.connect_canvas_changed(move |texture| {
-            if let Some(host) = host.upgrade()
-                && let Some(previews) = host.previews.borrow().as_ref()
-            {
-                previews.show_edited(&id, texture);
-            }
-        });
+        let (shown_host, shown_id) = (host.clone(), id.clone());
+        editor.connect_card(
+            move || {
+                shown_host.upgrade().is_some_and(|host| {
+                    host.previews
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|previews| previews.ids().contains(&shown_id))
+                })
+            },
+            move |texture| {
+                if let Some(host) = host.upgrade()
+                    && let Some(previews) = host.previews.borrow().as_ref()
+                {
+                    previews.show_edited(&id, texture);
+                }
+            },
+        );
         let host = Rc::downgrade(self);
         let id = artifact_id.to_owned();
         editor.window.connect_close_request(move |_| {
