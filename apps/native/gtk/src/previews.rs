@@ -367,6 +367,10 @@ fn carry_pile(state: &Rc<State>) {
                 return;
             }
             state.pile.carry_start();
+            state
+                .pile
+                .expand_button()
+                .set_cursor_from_name(Some("grabbing"));
         }
         at.set(Some((press, true)));
         state.carry_to(press, (press.0 + dx, press.1 + dy));
@@ -374,6 +378,10 @@ fn carry_pile(state: &Rc<State>) {
     let weak = Rc::downgrade(state);
     drag.connect_drag_end(move |_, _, _| {
         if let (Some(state), Some((_, true))) = (weak.upgrade(), grab.take()) {
+            state
+                .pile
+                .expand_button()
+                .set_cursor_from_name(Some("pointer"));
             state.pile.carry_end();
         }
     });
@@ -436,6 +444,7 @@ fn reorder_cards(state: &Rc<State>) {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     current.reordering = true;
                     current.card.held.set(true);
+                    current.card.image.set_cursor_from_name(Some("grabbing"));
                     state.quiet.set(true);
                     for card in state.cards.borrow().iter() {
                         card.refresh();
@@ -452,6 +461,7 @@ fn reorder_cards(state: &Rc<State>) {
         let (x, y) = (current.at.0 + dx, current.at.1 + dy);
         if state.pile.reorder_escapes(x, y) {
             current.reordering = false;
+            current.card.image.set_cursor_from_name(Some("grab"));
             state.pile.reorder_cancel();
             let (card, hot) = (current.card.clone(), current.in_card);
             drop(press);
@@ -463,6 +473,7 @@ fn reorder_cards(state: &Rc<State>) {
         if let (Some(state), Some(press)) = (weak.upgrade(), press.take())
             && press.reordering
         {
+            press.card.image.set_cursor_from_name(Some("grab"));
             state.pile.reorder_drop();
         }
     });
@@ -1264,6 +1275,9 @@ impl State {
             state.file_drag_ended(&card, accepted);
         });
         card.image.add_controller(drag);
+        // Shipping's `cursor: grab` over a card's draggable image (controls
+        // keep the pointer); a carry shows `grabbing` until it drops.
+        card.image.set_cursor_from_name(Some("grab"));
 
         let id = card.entry.id.clone();
         let weak = Rc::downgrade(self);
@@ -1470,9 +1484,9 @@ fn primary_button(saved: bool) -> gtk::Button {
 struct EditControl {
     button: gtk::Button,
     compact: Icon,
-    pill: Icon,
-    /// "In editor" at rest, "Show in editor" on hover or keyboard focus,
-    /// sharing one cell so the pill never changes width.
+    /// The pill's icon and "In editor" at rest, its icon and "Show in
+    /// editor" on hover or keyboard focus, sharing one cell so the pill never
+    /// changes width; the shorter one centres in it, as on macOS and Windows.
     label: gtk::Stack,
     presence: Cell<EditorPresence>,
     wake: RefCell<Option<glib::SourceId>>,
@@ -1490,11 +1504,8 @@ impl EditControl {
         let face = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         face.add_css_class("preview-editor-face");
         let compact = Icon::new("edit", 16).with_stroke(1.8);
-        let pill = Icon::new("edit", 11).with_stroke(2.2);
-        for icon in [&compact, &pill] {
-            icon.set_valign(gtk::Align::Center);
-            face.append(icon);
-        }
+        compact.set_valign(gtk::Align::Center);
+        face.append(&compact);
         let label = gtk::Stack::builder()
             .hhomogeneous(true)
             .transition_type(gtk::StackTransitionType::Crossfade)
@@ -1505,17 +1516,19 @@ impl EditControl {
             ("rest", preview_chrome::EDITOR_PRESENT_LABEL),
             ("hover", preview_chrome::EDITOR_SHOW_LABEL),
         ] {
-            let text = gtk::Label::new(Some(text));
-            // Shipping's shared grid cell keeps both labels at its start.
-            text.set_xalign(0.);
-            label.add_named(&text, Some(name));
+            let group = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+            group.set_halign(gtk::Align::Center);
+            let icon = Icon::new("edit", 11).with_stroke(2.2);
+            icon.set_valign(gtk::Align::Center);
+            group.append(&icon);
+            group.append(&gtk::Label::new(Some(text)));
+            label.add_named(&group, Some(name));
         }
         face.append(&label);
         button.set_child(Some(&face));
         let control = Self {
             button,
             compact,
-            pill,
             label,
             presence: Cell::new(EditorPresence::new(active, now_ms())),
             wake: RefCell::default(),
@@ -1560,7 +1573,6 @@ impl EditControl {
             }
         }
         self.compact.set_visible(!present);
-        self.pill.set_visible(present);
         self.label.set_visible(present);
         self.button.set_tooltip_text(phase.tooltip());
         self.button

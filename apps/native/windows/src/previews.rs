@@ -2964,9 +2964,22 @@ impl Stack {
             lerp(t.color("glass-text"), t.color("theme-accent-text"))
         };
         // The 16 px icon shrinks to 11 px (stroke 2.2) at the pill's
-        // 7 px padding inside its 1 px border.
+        // 7 px padding inside its 1 px border. The pill fits "Show in
+        // editor", so the shorter "In editor" centres with its icon instead
+        // of leaving a gap on the right, as on macOS.
         let side = 16. - 5. * grown;
-        let x = b.left + 6. + 2. * grown;
+        let label = preview_chrome::editor_pill_label(pointed, just_opened);
+        let text = if grown > 0. {
+            Some(g.text_sized(t, label, t.n("text-2xs"), "weight-semibold", None)?)
+        } else {
+            None
+        };
+        let start = b.left + 6. + 2. * grown;
+        let centred = text.as_ref().map_or(start, |text| {
+            let group = side + preview_chrome::EDITOR_PILL_GAP as f32 + text.width.ceil();
+            start.max((b.left + (b.right - b.left - group) / 2.).floor())
+        });
+        let x = start + (centred - start) * grown;
         let cy = (b.top + b.bottom) / 2.;
         unsafe { dc.PushAxisAlignedClip(&b, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
         let result = gfx::icon(
@@ -2979,11 +2992,9 @@ impl Stack {
             ink,
         )
         .and_then(|()| {
-            if grown <= 0. {
+            let Some(text) = text else {
                 return Ok(());
-            }
-            let label = preview_chrome::editor_pill_label(pointed, just_opened);
-            let text = g.text_sized(t, label, t.n("text-2xs"), "weight-semibold", None)?;
+            };
             faded(dc, grown, || {
                 gfx::text(
                     dc,

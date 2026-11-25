@@ -2123,9 +2123,6 @@ window.captures.preview-stack-window {
     var(--shadow-sm),
     0 0 14px alpha(var(--theme-accent), 0.2);
 }
-.captures button.preview-editor-control.is-present .preview-editor-label {
-  margin-left: 5px;
-}
 /* Hover or keyboard focus on the present pill fills it with the accent. */
 .captures button.preview-editor-control.is-present:hover .preview-editor-face,
 .captures button.preview-editor-control.is-present:focus-visible .preview-editor-face {
