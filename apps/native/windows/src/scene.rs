@@ -32,6 +32,8 @@ pub const PLATFORM: ShortcutPlatform = ShortcutPlatform::Windows;
 pub const NAV_WIDTH: f32 = 196.;
 /// The Updates section, which Check for Updates brings into view.
 pub const UPDATES_SECTION: usize = 6;
+/// The Shortcuts section, which the tray's Change Shortcut… brings into view.
+pub const SHORTCUTS_SECTION: usize = 3;
 /// Shipping's `@media (max-width: 720px)`: the sidebar hides, inline rows
 /// stack and grids drop to two columns.
 const COMPACT_MAX: f32 = 720.;
@@ -3865,6 +3867,33 @@ impl Scene {
             }
             Err(error) => self.save_failed(&error.to_string()),
         }
+    }
+
+    /// Note the recorders whose chord another app holds (`SHORTCUT_ROWS`
+    /// follows `CaptureShortcut` order). A recorder that is listening keeps
+    /// its own line. Returns whether a note changed.
+    pub fn set_shortcut_conflicts(
+        &mut self,
+        conflicts: &[captures_app::shortcuts::CaptureShortcut],
+    ) -> bool {
+        use captures_app::shortcuts::{CONFLICT_SUFFIX, conflict_note};
+        let mut changed = false;
+        for index in 0..SHORTCUT_ROWS.len() {
+            if self.recording == Some(index) {
+                continue;
+            }
+            let conflict = conflicts.iter().any(|action| *action as usize == index);
+            let message = if conflict {
+                conflict_note(shortcut_ref(&self.settings, index), PLATFORM)
+            } else if self.shortcut_errors[index].ends_with(CONFLICT_SUFFIX) {
+                String::new()
+            } else {
+                continue;
+            };
+            changed |= self.shortcut_errors[index] != message;
+            self.set_shortcut_error(index, message);
+        }
+        changed
     }
 
     fn set_shortcut_error(&mut self, index: usize, message: String) {

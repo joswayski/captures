@@ -105,6 +105,19 @@ enum CaptureShortcut: String {
         }
     }
 
+    /// The Preferences recorder row for this shortcut.
+    var settingIdentifier: String {
+        switch self {
+        case .newCapture: return "new_capture_shortcut"
+        case .region: return "region_shortcut"
+        case .window: return "window_shortcut"
+        case .display: return "display_shortcut"
+        case .recordRegion: return "recording.video_shortcut"
+        case .recordWindow: return "recording.window_shortcut"
+        case .recordDisplay: return "recording.display_shortcut"
+        }
+    }
+
     /// The capture action this shortcut stands for; tray items map to the same.
     var captureAction: CaptureAction {
         switch self {
@@ -117,6 +130,16 @@ enum CaptureShortcut: String {
         case .recordDisplay: return .record(.display)
         }
     }
+}
+
+struct ShortcutConflicts: Equatable {
+    struct Row: Equatable {
+        let action: CaptureShortcut
+        let label: String
+        let note: String
+    }
+    let rows: [Row]
+    let tooltip: String
 }
 
 private func wakeCaptureShortcuts() {
@@ -210,6 +233,22 @@ final class NativeCaptureShortcuts {
         guard let raw = result["action"] as? String, let action = CaptureShortcut(rawValue: raw)
         else { throw AppBridgeError.invalidResponse }
         return action
+    }
+
+    /// The shortcuts another app holds (shared `CaptureShortcuts::conflicts`):
+    /// each with its menu row and Preferences note, plus the status item's
+    /// tooltip, empty without conflicts. `recheck` claims them again first.
+    func conflicts(recheck: Bool) throws -> ShortcutConflicts {
+        guard !closed else { return ShortcutConflicts(rows: [], tooltip: "") }
+        let result = try Self.request(["operation": "conflicts", "recheck": recheck])
+        guard let raw = result["conflicts"] as? [[String: Any]] else { throw AppBridgeError.invalidResponse }
+        let rows: [ShortcutConflicts.Row] = try raw.map { row in
+            guard let action = (row["action"] as? String).flatMap(CaptureShortcut.init(rawValue:)),
+                  let label = row["label"] as? String, let note = row["note"] as? String
+            else { throw AppBridgeError.invalidResponse }
+            return .init(action: action, label: label, note: note)
+        }
+        return ShortcutConflicts(rows: rows, tooltip: result["tooltip"] as? String ?? "")
     }
 
     func close() {

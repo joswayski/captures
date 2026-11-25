@@ -4,7 +4,8 @@ This is the crates.io 0.8.0 source, manifests, examples, README and licenses.
 The root Tauri workspace and the isolated native wgpu and GTK workspaces use it.
 No dependency version or public API changes are included.
 
-Both source changes are in `src/platform_impl/x11/mod.rs`.
+Changes 1 and 2 are in `src/platform_impl/x11/mod.rs`; change 3 is in
+`src/platform_impl/macos/`.
 
 1. Flush queued `XUngrabKey` requests after unregistering and after rolling back
    a failed grab. The event loop does not flush output. Without this fix, Escape
@@ -21,7 +22,16 @@ Both source changes are in `src/platform_impl/x11/mod.rs`.
    connection and, after queuing a command, sends a `ClientMessage` to an unmapped
    window that connection owns, which ends the wait. Not proposed upstream yet.
 
-Remove this copy and the Cargo patches when a released version includes both.
+3. macOS `register` reports a chord another app holds exclusively as
+   `AlreadyRegistered`. A plain `RegisterEventHotKey` succeeds in that case
+   and then never fires (1Password's Quick Access holds ⌘⇧Space this way), so
+   Captures could not warn about it. `register` first asks for the chord with
+   `kEventHotKeyExclusive`, which only another exclusive holder refuses with
+   `eventHotKeyExistsErr`, releases that probe at once and then registers
+   normally as before, so it never takes a chord from an app that shares it.
+   Not proposed upstream yet.
+
+Remove this copy and the Cargo patches when a released version includes all three.
 
 Regression check from the repository root, on a disposable X11 display:
 

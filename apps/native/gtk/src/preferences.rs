@@ -77,6 +77,10 @@ struct Prefs {
     reveal: RefCell<Option<Reveal>>,
     /// Switch rows by setting path, for [`reveal`].
     rows: RefCell<Vec<(&'static str, gtk::Box, TokenSwitch)>>,
+    /// Each shortcut recorder's "used by another app" note, by setting path.
+    conflict_notes: RefCell<Vec<(String, gtk::Label)>>,
+    /// The paths whose chord another app holds.
+    conflicts: RefCell<Vec<String>>,
 }
 
 /// A setting's value at a dotted path, as JSON.
@@ -194,6 +198,20 @@ pub fn restyle(tokens: Rc<Tokens>) {
     }
 }
 
+/// Note the shortcut recorders whose chord another app holds, by setting
+/// path (`new_capture_shortcut`, `recording.video_shortcut`).
+pub fn set_shortcut_conflicts(paths: Vec<String>) {
+    if let Some(prefs) = OPEN.with(|open| open.borrow().upgrade()) {
+        for (path, note) in prefs.conflict_notes.borrow().iter() {
+            if let Some(keys) = prefs.get(path).as_str() {
+                note.set_label(&captures_app::shortcuts::conflict_note(keys, PLATFORM));
+            }
+            note.set_visible(paths.contains(path));
+        }
+        prefs.conflicts.replace(paths);
+    }
+}
+
 /// The resident app's update state changed: redraw an open Updates card.
 pub fn refresh_updates() {
     updates::refresh_open();
@@ -305,6 +323,8 @@ pub fn build(
         jump: RefCell::default(),
         reveal: RefCell::default(),
         rows: RefCell::default(),
+        conflict_notes: RefCell::default(),
+        conflicts: RefCell::default(),
     });
     OPEN.with(|open| *open.borrow_mut() = Rc::downgrade(&prefs));
 
@@ -1543,6 +1563,17 @@ fn shortcut_row(prefs: &Rc<Prefs>, title: &'static str, path: String) -> gtk::Bo
     error.set_visible(false);
     error.set_accessible_role(gtk::AccessibleRole::Status);
     control.append(&error);
+    let saved_keys = prefs.get(&path).as_str().unwrap_or_default().to_owned();
+    let note = label(
+        &captures_app::shortcuts::conflict_note(&saved_keys, PLATFORM),
+        "shortcut-error",
+    );
+    note.set_xalign(0.);
+    note.set_wrap(true);
+    note.set_visible(prefs.conflicts.borrow().contains(&path));
+    note.set_accessible_role(gtk::AccessibleRole::Status);
+    control.append(&note);
+    prefs.conflict_notes.borrow_mut().push((path.clone(), note));
     row.append(&control);
 
     let show = {

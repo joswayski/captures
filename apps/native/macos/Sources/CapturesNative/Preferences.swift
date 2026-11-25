@@ -863,6 +863,26 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var tokens: Tokens { tokensProvider() }
     private var dark: Bool { tokens.color("text").brightnessComponent > 0.5 }
     var isRecordingShortcut: Bool { recordingShortcut != nil }
+    /// Shortcut rows (`new_capture_shortcut`, `recording.video_shortcut`) whose
+    /// chord another app holds, with the note each shows.
+    private var shortcutConflicts: [String: String] = [:]
+    private var shortcutsRevealPending = false
+
+    /// Show or clear the "another app uses this" notes. Never interrupts a
+    /// recorder: the notes follow once it stops and registration resumes.
+    func setShortcutConflicts(_ conflicts: [String: String]) {
+        guard conflicts != shortcutConflicts, recordingShortcut == nil else { return }
+        shortcutConflicts = conflicts
+        refreshCard("shortcuts")
+    }
+
+    /// The tray's Change Shortcut… row.
+    /// Scrolls on the next main-loop pass: a window Change… just reopened is
+    /// still taking its final size, which would clamp the scroll back to the top.
+    func revealShortcuts() {
+        if sectionViews["shortcuts"] == nil { shortcutsRevealPending = true }
+        else { DispatchQueue.main.async { [weak self] in self?.reveal("shortcuts") } }
+    }
 
     // MARK: Shell
 
@@ -1038,6 +1058,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         installKeyViewLoop()
         if !rebuilding { revealHighlightIfNeeded() }
         if updatesRevealPending { updatesRevealPending = false; reveal("updates") }
+        if shortcutsRevealPending {
+            shortcutsRevealPending = false
+            DispatchQueue.main.async { [weak self] in self?.reveal("shortcuts") }
+        }
     }
 
     /// Replace only Updates: a network result must not interrupt a shortcut
@@ -1753,8 +1777,22 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             width: width, height: 14), size: tokens.number("text-xs"), parent: parent, color: "danger-text")
         error.identifier = NSUserInterfaceItemIdentifier("shortcut-error.\(identifier)")
         error.setAccessibilityRole(.staticText); error.setAccessibilityLabel("\(title) shortcut error")
-        error.isHidden = true
         shortcutErrors[identifier] = error
+        // A chord another app holds keeps its note until it is changed.
+        if let note = shortcutConflicts[identifier] {
+            error.stringValue = note
+            // A long chord's note grows leftward under the title rather than
+            // truncating, keeping its right edge on the recorder's.
+            let needed = ceil(error.intrinsicContentSize.width)
+            if needed > width {
+                let grown = min(needed, layout.control.maxX - inset)
+                error.frame.origin.x = layout.control.maxX - grown
+                error.frame.size.width = grown
+            }
+            error.setAccessibilityLabel("\(title) shortcut conflict")
+            return layout.row.maxY + Self.shortcutErrorHeight
+        }
+        error.isHidden = true
         return layout.row.maxY
     }
 

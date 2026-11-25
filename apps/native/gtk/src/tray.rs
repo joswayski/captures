@@ -5,6 +5,9 @@
 
 use std::rc::Rc;
 
+use captures_app::shortcuts::{
+    CaptureShortcut, ShortcutPlatform, conflict_menu_label, conflict_tooltip, shortcut_text,
+};
 use captures_app::update_notice::{TrayUpdateItem, UpdateStatus, tray_tooltip, tray_update_item};
 use gtk::prelude::*;
 use gtk::{gio, glib};
@@ -27,10 +30,12 @@ pub enum Action {
     Preferences,
     SendFeedback,
     CheckUpdates,
+    /// A "… is used by another app — Change Shortcut…" row.
+    ChangeShortcut,
     Quit,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Shortcut {
     NewCapture,
     Region,
@@ -112,17 +117,26 @@ const MENU: [Row; 15] = [
     Row::Item("quit", "Quit Captures", Action::Quit, None),
 ];
 
-fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {
-    match shortcut {
-        Shortcut::NewCapture => &settings.new_capture_shortcut,
-        Shortcut::Region => &settings.region_shortcut,
-        Shortcut::Window => &settings.window_shortcut,
-        Shortcut::Display => &settings.display_shortcut,
-        Shortcut::RecordRegion => &settings.recording.video_shortcut,
-        Shortcut::RecordWindow => &settings.recording.window_shortcut,
-        Shortcut::RecordDisplay => &settings.recording.display_shortcut,
+impl Shortcut {
+    fn capture(self) -> CaptureShortcut {
+        match self {
+            Self::NewCapture => CaptureShortcut::NewCapture,
+            Self::Region => CaptureShortcut::Region,
+            Self::Window => CaptureShortcut::Window,
+            Self::Display => CaptureShortcut::Display,
+            Self::RecordRegion => CaptureShortcut::RecordRegion,
+            Self::RecordWindow => CaptureShortcut::RecordWindow,
+            Self::RecordDisplay => CaptureShortcut::RecordDisplay,
+        }
     }
 }
+
+fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {
+    shortcut_text(settings, shortcut.capture())
+}
+
+/// The id of a conflict row, which opens Preferences at Shortcuts.
+const CHANGE_SHORTCUT: &str = "change-shortcut-";
 
 /// Shipping `tray_accelerator`: `KeyA`/`Digit1` codes become their key.
 fn accelerator(shortcut: &str) -> Option<Accelerator> {
@@ -167,6 +181,7 @@ fn accelerators(settings: &captures_settings::AppSettings) -> Vec<String> {
 fn menu(
     settings: &captures_settings::AppSettings,
     update: &TrayUpdateItem,
+    conflicts: &[CaptureShortcut],
 ) -> Result<Menu, String> {
     let menu = Menu::new();
     // Check for Updates works only in a Preview build with update metadata.
@@ -187,6 +202,17 @@ fn menu(
         append(&update_row())?;
         append(&PredefinedMenuItem::separator())?;
     }
+    // A shortcut another app holds is pinned first, each naming its action,
+    // so the menu says which one never fires before anything else.
+    for action in conflicts {
+        let keys = shortcut_text(settings, *action);
+        let label = conflict_menu_label(*action, keys, ShortcutPlatform::Linux);
+        let id = format!("{CHANGE_SHORTCUT}{}", action.id());
+        append(&MenuItem::with_id(id, label, true, None))?;
+    }
+    if !conflicts.is_empty() {
+        append(&PredefinedMenuItem::separator())?;
+    }
     for row in &MENU {
         match *row {
             Row::Item(id, label, _, keys) => append(&MenuItem::with_id(
@@ -195,7 +221,9 @@ fn menu(
                 // Every row runs on X11 and Wayland; Wayland recording
                 // refuses at start where there is no ScreenCast portal.
                 true,
-                keys.and_then(|keys| accelerator(shortcut(settings, keys))),
+                // A chord another app holds never fires, so it shows no hint.
+                keys.filter(|keys| !conflicts.contains(&keys.capture()))
+                    .and_then(|keys| accelerator(shortcut(settings, keys))),
             ))?,
             Row::Updates if !update.pin_first => append(&update_row())?,
             Row::Updates => {}
@@ -210,9 +238,29 @@ pub struct Tray {
     accelerators: Vec<String>,
     settings: captures_settings::AppSettings,
     update: TrayUpdateItem,
+    update_tooltip: &'static str,
+    conflicts: Vec<CaptureShortcut>,
 }
 
 impl Tray {
+    /// Follow the shortcuts another app holds: their rows, hints and the
+    /// tooltip, which outranks the update state's while any is held.
+    pub fn set_conflicts(&mut self, conflicts: Vec<CaptureShortcut>) {
+        if conflicts == self.conflicts {
+            return;
+        }
+        self.conflicts = conflicts;
+        self.refresh_tooltip();
+        self.rebuild();
+    }
+
+    fn refresh_tooltip(&self) {
+        let tooltip = conflict_tooltip(self.update_tooltip.to_owned(), &self.conflicts);
+        if let Err(error) = self.icon.set_tooltip(Some(tooltip)) {
+            eprintln!("Could not refresh the tray tooltip: {error}");
+        }
+    }
+
     /// Refresh the menu's accelerators after the saved shortcuts change.
     pub fn update(&mut self, settings: &captures_settings::AppSettings) {
         let accelerators = accelerators(settings);
@@ -232,14 +280,13 @@ impl Tray {
             return;
         }
         self.update = update;
-        if let Err(error) = self.icon.set_tooltip(Some(tray_tooltip(status))) {
-            eprintln!("Could not refresh the tray tooltip: {error}");
-        }
+        self.update_tooltip = tray_tooltip(status);
+        self.refresh_tooltip();
         self.rebuild();
     }
 
     fn rebuild(&mut self) {
-        match menu(&self.settings, &self.update) {
+        match menu(&self.settings, &self.update, &self.conflicts) {
             Ok(menu) => {
                 self.icon.set_menu(Some(Box::new(menu)));
                 self.accelerators = accelerators(&self.settings);
@@ -272,7 +319,7 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
         TrayIconBuilder::new()
             .with_tooltip(captures_app::preview_channel::TRAY_NAME)
             .with_icon(icon)
-            .with_menu(Box::new(menu(settings, &tray_update_item(None))?))
+            .with_menu(Box::new(menu(settings, &tray_update_item(None), &[])?))
             .build()
             .map_err(|error| format!("Tray is unavailable: {error}"))
     })();
@@ -284,10 +331,17 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
         }
     };
     MenuEvent::set_event_handler(Some(|event: MenuEvent| {
-        let Some(action) = MENU.iter().find_map(|row| match row {
-            Row::Item(id, _, action, _) if *id == event.id.0 => Some(*action),
-            Row::Updates if event.id.0 == "check-updates" => Some(Action::CheckUpdates),
-            _ => None,
+        let change = event
+            .id
+            .0
+            .starts_with(CHANGE_SHORTCUT)
+            .then_some(Action::ChangeShortcut);
+        let Some(action) = change.or_else(|| {
+            MENU.iter().find_map(|row| match row {
+                Row::Item(id, _, action, _) if *id == event.id.0 => Some(*action),
+                Row::Updates if event.id.0 == "check-updates" => Some(Action::CheckUpdates),
+                _ => None,
+            })
         }) else {
             return;
         };
@@ -299,6 +353,8 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
         accelerators: accelerators(settings),
         settings: settings.clone(),
         update: tray_update_item(None),
+        update_tooltip: tray_tooltip(None),
+        conflicts: Vec::new(),
     })
 }
 
@@ -345,6 +401,12 @@ pub fn run(host: &Rc<Host>, action: Action) {
         }
         Action::Preferences => {
             host.show_preferences();
+            crate::live::recheck_shortcut_conflicts(host);
+        }
+        Action::ChangeShortcut => {
+            host.show_preferences();
+            crate::live::recheck_shortcut_conflicts(host);
+            crate::preferences::show_section("shortcuts");
         }
         // Shipping's `handle_tray_action`: an update in hand shows the
         // notice; otherwise check now, then show the notice for an update

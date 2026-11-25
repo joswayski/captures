@@ -243,6 +243,51 @@ fn sync_shortcuts(host: &Rc<Host>, settings: &captures_settings::AppSettings) {
             serde_json::json!({"ok": result.is_ok(), "error": result.err()}),
         );
     });
+    show_shortcut_conflicts(host);
+}
+
+/// Retry the chords another app held, as Preferences opens, so a chord the
+/// other app gave up works again and the notes are current.
+pub(crate) fn recheck_shortcut_conflicts(host: &Rc<Host>) {
+    SHORTCUTS.with(|cell| {
+        if let Some(shortcuts) = cell.borrow_mut().as_mut()
+            && let Err(error) = shortcuts.recheck_conflicts()
+        {
+            eprintln!("Could not check capture shortcuts again: {error}");
+        }
+    });
+    show_shortcut_conflicts(host);
+}
+
+/// The shortcuts another app holds (X11 grabs; the Wayland portal reports
+/// none), in the tray and an open Preferences.
+fn show_shortcut_conflicts(host: &Rc<Host>) {
+    let conflicts = SHORTCUTS
+        .with(|cell| cell.borrow().as_ref().map(CaptureShortcuts::conflicts))
+        .unwrap_or_default();
+    if !conflicts.is_empty() {
+        emit(
+            "shortcut-conflicts",
+            serde_json::json!({"actions": conflicts.iter().map(|a| a.id()).collect::<Vec<_>>()}),
+        );
+    }
+    let paths = conflicts
+        .iter()
+        .map(|action| match action {
+            CaptureShortcut::NewCapture => "new_capture_shortcut",
+            CaptureShortcut::Region => "region_shortcut",
+            CaptureShortcut::Window => "window_shortcut",
+            CaptureShortcut::Display => "display_shortcut",
+            CaptureShortcut::RecordRegion => "recording.video_shortcut",
+            CaptureShortcut::RecordWindow => "recording.window_shortcut",
+            CaptureShortcut::RecordDisplay => "recording.display_shortcut",
+        })
+        .map(str::to_owned)
+        .collect();
+    crate::preferences::set_shortcut_conflicts(paths);
+    if let Some(tray) = host.tray.borrow_mut().as_mut() {
+        tray.set_conflicts(conflicts);
+    }
 }
 
 /// While New Capture selects, the shared routes hand it every chord
