@@ -4079,7 +4079,7 @@ impl Scene {
         &mut self,
         conflicts: &[captures_app::shortcuts::CaptureShortcut],
     ) -> bool {
-        use captures_app::shortcuts::{CONFLICT_SUFFIX, conflict_note};
+        use captures_app::shortcuts::CONFLICT_NOTE;
         let mut changed = false;
         for index in 0..SHORTCUT_ROWS.len() {
             if self.recording == Some(index) {
@@ -4087,16 +4087,26 @@ impl Scene {
             }
             let conflict = conflicts.iter().any(|action| *action as usize == index);
             let message = if conflict {
-                conflict_note(shortcut_ref(&self.settings, index), PLATFORM)
-            } else if self.shortcut_errors[index].ends_with(CONFLICT_SUFFIX) {
+                CONFLICT_NOTE.to_owned()
+            } else if self.shortcut_errors[index] == CONFLICT_NOTE {
                 String::new()
             } else {
                 continue;
             };
             changed |= self.shortcut_errors[index] != message;
             self.set_shortcut_error(index, message);
+            // The recorder itself turns red.
+            self.nodes[self.shortcuts[index].recorder].dirty = true;
+            self.nodes[self.shortcuts[index].hover].dirty = true;
         }
         changed
+    }
+
+    /// Whether a recorder shows another app's hold on its chord: red, with
+    /// the shipping `warning` icon and [`CONFLICT_NOTE`] below it.
+    fn shortcut_conflict(&self, index: usize) -> bool {
+        self.recording != Some(index)
+            && self.shortcut_errors[index] == captures_app::shortcuts::CONFLICT_NOTE
     }
 
     fn set_shortcut_error(&mut self, index: usize, message: String) {
@@ -5367,12 +5377,32 @@ impl Scene {
             }
             Kind::Recorder(index) => {
                 let radius = t.n("r-md");
-                gfx::fill_round(dc, all, radius, c("surface-field"))?;
-                gfx::border(dc, all, radius, 1., c("control-border"))?;
                 // `padding: 2px var(--s-4)`, caps `--s-3` apart.
                 let left = 1. + t.n("s-4");
+                let conflict = self.shortcut_conflict(index);
+                let mut right = w - left;
+                if conflict {
+                    // Another app holds the chord: a signal border and wash,
+                    // and the shipping warning icon at the trailing edge.
+                    gfx::fill_round(dc, all, radius, c("danger-surface"))?;
+                    gfx::border(dc, all, radius, 1., c("theme-signal"))?;
+                    let side = 14.;
+                    right -= side + t.n("s-3");
+                    gfx::icon(
+                        dc,
+                        &g.factory,
+                        "warning",
+                        &[],
+                        (w - left - side, ((h - side) / 2.).round(), side),
+                        2.,
+                        c("danger-text"),
+                    )?;
+                } else {
+                    gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                    gfx::border(dc, all, radius, 1., c("control-border"))?;
+                }
                 let caps = self.texts.caps.get(index).filter(|caps| !caps.is_empty());
-                let clip = rect(left, 0., w - left, h);
+                let clip = rect(left, 0., right, h);
                 unsafe {
                     dc.PushAxisAlignedClip(
                         &clip,
@@ -5406,6 +5436,10 @@ impl Scene {
                     }
                 }
                 unsafe { dc.PopAxisAlignedClip() };
+            }
+            Kind::RecorderHover(index) if self.shortcut_conflict(index) => {
+                // A held chord's recorder stays red under the pointer.
+                gfx::border(dc, all, t.n("r-md"), 1., c("theme-signal"))?;
             }
             Kind::RecorderHover(_) | Kind::TriggerHover(_) => {
                 // Cover the resting border, then the hover one.

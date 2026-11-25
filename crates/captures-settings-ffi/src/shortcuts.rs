@@ -1,5 +1,5 @@
 use captures_app::shortcuts::{
-    CaptureShortcuts, ShortcutKeyEvent, ShortcutPlatform, conflict_menu_label, conflict_note,
+    CONFLICT_NOTE, CaptureShortcuts, ShortcutKeyEvent, ShortcutPlatform, conflict_menu_label,
     conflict_tooltip, record_shortcut, shortcut_display_tokens, shortcut_text,
 };
 use captures_settings::AppSettings;
@@ -35,7 +35,7 @@ fn conflicts(shortcuts: Option<&CaptureShortcuts>) -> Value {
                         shortcut_text(&settings, *action),
                         ShortcutPlatform::Macos,
                     ),
-                    "note": conflict_note(shortcut_text(&settings, *action), ShortcutPlatform::Macos),
+                    "note": CONFLICT_NOTE,
                 })
             })
             .collect();

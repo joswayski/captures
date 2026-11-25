@@ -469,6 +469,20 @@ window.captures.countdown-window {
   border-color: var(--theme-accent);
   box-shadow: var(--focus-ring-tight);
 }
+/* Another app holds the chord: signal border and wash, warning icon. */
+.captures button.shortcut-recorder.shortcut-conflict,
+.captures button.shortcut-recorder.shortcut-conflict:hover {
+  border-color: var(--theme-signal);
+  background: var(--danger-surface);
+}
+/* Recording a replacement shows the accent, as on the other hosts. */
+.captures button.shortcut-recorder.shortcut-conflict.shortcut-recording {
+  border-color: var(--theme-accent);
+  background: var(--surface-field);
+}
+.captures .shortcut-conflict-icon {
+  color: var(--danger-text);
+}
 .captures .shortcut-prompt {
   color: var(--text-faint);
   font-size: var(--text-sm);

@@ -99,9 +99,7 @@ pub fn selector_input_scope() -> Option<SelectorInputScope> {
     routes.input_scope()
 }
 
-/// The end of every conflict note, so a host can tell its note from a
-/// recorder error.
-pub const CONFLICT_SUFFIX: &str = " is used by another app";
+const CONFLICT_SUFFIX: &str = " is used by another app";
 
 /// The tray row for a shortcut another app holds, pinned at the top of the
 /// menu: which shortcut, its keys, and that choosing it fixes it. Neither
@@ -118,13 +116,11 @@ pub fn conflict_menu_label(
     )
 }
 
-/// The Preferences note under the recorder whose chord another app holds.
-pub fn conflict_note(shortcut: &str, platform: ShortcutPlatform) -> String {
-    format!(
-        "{}{CONFLICT_SUFFIX}",
-        shortcut_display_tokens(shortcut, platform).join("+")
-    )
-}
+/// The Preferences note under a recorder whose chord another app holds.
+/// Hosts also draw that recorder red with the shipping `warning` icon. The
+/// recorder already shows the keys, so the note never repeats them and wraps
+/// in the recorder's column.
+pub const CONFLICT_NOTE: &str = "Another app uses this shortcut. Click it to choose another.";
 
 /// The tray tooltip while shortcuts are held by another app; `base` is the
 /// update state's tooltip otherwise.
@@ -1766,10 +1762,6 @@ mod tests {
                 ShortcutPlatform::Windows
             ),
             "Record Region shortcut (Win+Alt+R) is used by another app — Change…"
-        );
-        assert_eq!(
-            conflict_note(space, ShortcutPlatform::Windows),
-            "Ctrl+Shift+Space is used by another app"
         );
         assert_eq!(conflict_tooltip("Captures".into(), &[]), "Captures");
         assert_eq!(

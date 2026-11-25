@@ -79,7 +79,7 @@ struct Prefs {
     /// Switch rows by setting path, for [`reveal`].
     rows: RefCell<Vec<(&'static str, gtk::Box, TokenSwitch)>>,
     /// Each shortcut recorder's "used by another app" note, by setting path.
-    conflict_notes: RefCell<Vec<(String, gtk::Label)>>,
+    conflict_notes: RefCell<Vec<ConflictMark>>,
     /// The paths whose chord another app holds.
     conflicts: RefCell<Vec<String>>,
 }
@@ -203,15 +203,33 @@ pub fn restyle(tokens: Rc<Tokens>) {
     }
 }
 
-/// Note the shortcut recorders whose chord another app holds, by setting
+/// A shortcut row's conflict marks: the red recorder (`.shortcut-conflict`),
+/// its warning icon and the note under it.
+struct ConflictMark {
+    path: String,
+    recorder: gtk::Button,
+    icon: Icon,
+    note: gtk::Label,
+}
+
+impl ConflictMark {
+    fn show(&self, conflict: bool) {
+        if conflict {
+            self.recorder.add_css_class("shortcut-conflict");
+        } else {
+            self.recorder.remove_css_class("shortcut-conflict");
+        }
+        self.icon.set_visible(conflict);
+        self.note.set_visible(conflict);
+    }
+}
+
+/// Mark the shortcut recorders whose chord another app holds, by setting
 /// path (`new_capture_shortcut`, `recording.video_shortcut`).
 pub fn set_shortcut_conflicts(paths: Vec<String>) {
     if let Some(prefs) = OPEN.with(|open| open.borrow().upgrade()) {
-        for (path, note) in prefs.conflict_notes.borrow().iter() {
-            if let Some(keys) = prefs.get(path).as_str() {
-                note.set_label(&captures_app::shortcuts::conflict_note(keys, PLATFORM));
-            }
-            note.set_visible(paths.contains(path));
+        for mark in prefs.conflict_notes.borrow().iter() {
+            mark.show(paths.contains(&mark.path));
         }
         prefs.conflicts.replace(paths);
     }
@@ -1571,26 +1589,35 @@ fn shortcut_row(prefs: &Rc<Prefs>, title: &'static str, path: String) -> gtk::Bo
     let recorder = gtk::Button::new();
     recorder.add_css_class("shortcut-recorder");
     recorder.update_relation(&[gtk::accessible::Relation::LabelledBy(&[name.upcast_ref()])]);
-    // `.shortcut-recorder`: `gap: var(--s-3)` between key caps.
+    // `.shortcut-recorder`: `gap: var(--s-3)` between key caps, and the
+    // trailing warning icon while another app holds the chord.
     let keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    recorder.set_child(Some(&keys));
+    keys.set_hexpand(true);
+    let warning = Icon::new("warning", 14).with_stroke(2.);
+    warning.add_css_class("shortcut-conflict-icon");
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    inner.append(&keys);
+    inner.append(&warning);
+    recorder.set_child(Some(&inner));
     control.append(&recorder);
+    let note = label(captures_app::shortcuts::CONFLICT_NOTE, "shortcut-error");
+    note.set_xalign(0.);
+    note.set_wrap(true);
+    note.set_accessible_role(gtk::AccessibleRole::Status);
+    control.append(&note);
+    let mark = ConflictMark {
+        path: path.clone(),
+        recorder: recorder.clone(),
+        icon: warning,
+        note,
+    };
+    mark.show(prefs.conflicts.borrow().contains(&path));
+    prefs.conflict_notes.borrow_mut().push(mark);
     let error = label("", "shortcut-error");
     error.set_wrap(true);
     error.set_visible(false);
     error.set_accessible_role(gtk::AccessibleRole::Status);
     control.append(&error);
-    let saved_keys = prefs.get(&path).as_str().unwrap_or_default().to_owned();
-    let note = label(
-        &captures_app::shortcuts::conflict_note(&saved_keys, PLATFORM),
-        "shortcut-error",
-    );
-    note.set_xalign(0.);
-    note.set_wrap(true);
-    note.set_visible(prefs.conflicts.borrow().contains(&path));
-    note.set_accessible_role(gtk::AccessibleRole::Status);
-    control.append(&note);
-    prefs.conflict_notes.borrow_mut().push((path.clone(), note));
     row.append(&control);
 
     let show = {

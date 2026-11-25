@@ -86,6 +86,11 @@ final class ShortcutRecorderButton: NSButton {
     private(set) var recording = false
     private(set) var keys: [String] = []
     private(set) var error = ""
+    /// Another app holds this chord: drawn red with the shipping warning icon,
+    /// and VoiceOver reads this note as the recorder's help.
+    var conflictNote: String? {
+        didSet { updateAccessibility(); needsDisplay = true }
+    }
     private var hovered = false
     private var hoverTracking: NSTrackingArea?
 
@@ -158,11 +163,19 @@ final class ShortcutRecorderButton: NSButton {
         state = recording ? .on : .off
         setAccessibilityValue(keys.isEmpty ? (recording ? "Press shortcut" : "None") : keys.joined(separator: " + "))
         setAccessibilitySelected(recording)
-        setAccessibilityHelp(error.isEmpty ? nil : error)
+        setAccessibilityHelp(!error.isEmpty ? error : recording ? nil : conflictNote)
+    }
+
+    /// The trailing warning icon's square, while the conflict shows.
+    private var warningRect: NSRect? {
+        guard conflictNote != nil, !recording else { return nil }
+        let side: CGFloat = 14
+        return NSRect(x: bounds.maxX - tokens.number("s-4") - side, y: (bounds.height - side) / 2,
+                      width: side, height: side)
     }
 
     private func chipLayout(_ values: [String]) -> (NSFont, [NSRect]) {
-        let available = max(0, bounds.width - 20)
+        let available = max(0, bounds.width - 20 - (warningRect.map { $0.width + tokens.number("s-3") } ?? 0))
         // Shipping `kbd`: `--text-2xs` semibold chips with 5 pt padding.
         let baseSize = tokens.number("text-2xs")
         let gap: CGFloat = 4
@@ -208,10 +221,16 @@ final class ShortcutRecorderButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let radius = tokens.number("r-md")
         let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
-        tokens.color("surface-field").setFill(); outline.fill()
+        let warning = warningRect
+        tokens.color(warning == nil ? "surface-field" : "danger-surface").setFill(); outline.fill()
         let focused = recording || window?.firstResponder === self
-        tokens.color(focused ? "theme-accent" : (isEnabled && hovered ? "border-strong" : "control-border")).setStroke()
+        tokens.color(warning != nil ? "theme-signal"
+            : focused ? "theme-accent" : (isEnabled && hovered ? "border-strong" : "control-border")).setStroke()
         outline.lineWidth = 1; outline.stroke()
+        if let warning {
+            tokens.color("danger-text").setStroke()
+            ShippingIcons.stroke("warning", in: warning, width: 2)
+        }
         if focused { drawFocusRing(tokens, in: bounds.insetBy(dx: -1, dy: -1), radius: radius + 1) }
         guard !keys.isEmpty else {
             let prompt = PreferencesPolicy.text("shortcuts.prompt")
@@ -1825,27 +1844,28 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             self.stopShortcutRecording(recorder, identifier: identifier)
         }
         parent.addSubview(recorder); shortcutRecorders[identifier] = recorder
-        let error = addLabel("", frame: NSRect(x: layout.control.minX, y: layout.control.maxY + tokens.number("s-2"),
+        // A chord another app holds: the recorder turns red, and a note that
+        // wraps in the recorder's column says what to do. It stays until the
+        // chord changes; a recording error opens below it.
+        var bottom = layout.row.maxY
+        if let note = shortcutConflicts[identifier] {
+            recorder.conflictNote = note
+            let size = tokens.number("text-xs")
+            let height = textHeight(note, size: size, width: width)
+            let label = wrappingLabel(note, frame: NSRect(x: layout.control.minX,
+                y: bottom + tokens.number("s-3"), width: width, height: height), size: size, parent: parent,
+                color: "danger-text")
+            label.identifier = NSUserInterfaceItemIdentifier("shortcut-conflict.\(identifier)")
+            label.setAccessibilityLabel("\(title) shortcut conflict")
+            bottom = label.frame.maxY
+        }
+        let error = addLabel("", frame: NSRect(x: layout.control.minX, y: bottom + tokens.number("s-2"),
             width: width, height: 14), size: tokens.number("text-xs"), parent: parent, color: "danger-text")
         error.identifier = NSUserInterfaceItemIdentifier("shortcut-error.\(identifier)")
         error.setAccessibilityRole(.staticText); error.setAccessibilityLabel("\(title) shortcut error")
-        shortcutErrors[identifier] = error
-        // A chord another app holds keeps its note until it is changed.
-        if let note = shortcutConflicts[identifier] {
-            error.stringValue = note
-            // A long chord's note grows leftward under the title rather than
-            // truncating, keeping its right edge on the recorder's.
-            let needed = ceil(error.intrinsicContentSize.width)
-            if needed > width {
-                let grown = min(needed, layout.control.maxX - inset)
-                error.frame.origin.x = layout.control.maxX - grown
-                error.frame.size.width = grown
-            }
-            error.setAccessibilityLabel("\(title) shortcut conflict")
-            return layout.row.maxY + Self.shortcutErrorHeight
-        }
         error.isHidden = true
-        return layout.row.maxY
+        shortcutErrors[identifier] = error
+        return bottom
     }
 
     /// Shows or clears a recorder's inline error, moving the rows and cards
