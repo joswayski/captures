@@ -1058,6 +1058,8 @@ final class UpdateNoticeController {
     var statusItemFrame: (() -> NSRect?)?
     private var panel: UpdateNoticePanel?
     private var view: UpdateNoticeView?
+    /// The rendered card, for workbench screenshots.
+    var contentView: NSView? { view }
     private var timer: Timer?
     private var suspended = false
     private var lastReport: [String: Any] = [:]

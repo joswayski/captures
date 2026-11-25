@@ -2706,7 +2706,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func captureWindow(to path: String) {
-        guard let view = window.contentView else { return }
+        // The update scene's subject is the floating notice panel, not the fixture buttons.
+        let notice = scene == "update" ? updateNotice?.contentView : nil
+        guard let view = notice ?? window.contentView else { return }
         let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds)
         guard let representation else { return }
         view.cacheDisplay(in: view.bounds, to: representation)
