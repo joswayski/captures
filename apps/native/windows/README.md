@@ -6,7 +6,13 @@ Automation, with Captures' own token-drawn controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
 direction and the gates it must pass. It has Preferences (every shipping
 card with the Custom accent's color editor, the Capture card's mini preview,
-screenshot format and countdown rows, an editable Save captures to field that
+screenshot format and countdown rows, When you drag a preview out (three
+option tiles in one radio group, each looping its style's demo from the
+shared `preview_drag_style::demo`, redrawn on the 16 ms motion timer only
+while Preferences is on screen, the row is in view and Show mini previews is
+on, and held mid-drag under reduced motion; arrows, Tab, type-ahead, Find
+and UI Automation radio items like the other pickers; `--select drag-style`
+scrolls it into view), an editable Save captures to field that
 keeps a blank draft unsaved like Tauri, the narrow layout below 720 px,
 Find on a reusable text field, `src/textfield.rs`, and page copy you can
 select and copy like Tauri's: drag, double-click a word, triple-click a
@@ -321,15 +327,29 @@ older captures" / "Show newer captures"; a new capture or Expand returns to
 the newest card. Dragging an expanded card's image past the system drag
 threshold drags its file into other apps through the shared `drag.rs` (the
 shared `PreparePreviewDrag` export, a copy with the 284 × 160 drag image);
-the card goes hollow while it runs (`.thumbnail-file-dragging`). An accepted
-drop outside Captures dismisses the card, a drop back on the stack shakes it
-(`thumbnail-drop-reject`, skipped under reduced motion), and any other end,
-including a drop on another Captures window, keeps it; a failed export shows
-on the card.
-`--tool previews --select pile|pile-hover|pile-top|overflow|file-drag`
-renders it (compared with the Tauri harness). Scrolling, the cues, Minimize
-and Expand were checked live through UI Automation with History's Restore on
-Windows 11 at 150%; the carry, the wheel and file drags are unit- and
+its slot shows Preferences' drag style, read when the drag begins, under the
+shared `preview_drag_style::DragOut` pose: Frosted imprint (the default: the
+capture at half opacity, blurred through one cached Direct2D Gaussian per
+drag, behind a 1 DIP hairline, the card at 0.97 with no chrome), Dock gap
+(the card lifts, fades and shrinks while its slot closes and older cards
+slide toward the anchored edge) or Quiet well (a recessed veil tile with the
+"out" glyph). An accepted drop outside Captures fades the imprint, then its
+slot closes (older cards move up in a top stack, down in a bottom one) and
+only then does the card leave and the window shrink, with nothing jumping; a
+drop back on the stack shakes it (`thumbnail-drop-reject`, skipped under
+reduced motion) and, like any other end (a drop on another Captures window,
+a failed export, which shows on the card, or a drag let go before it began),
+brings the card back as its style reverses. A mostly vertical press on a
+card of a stack of two or more carries it instead (`preview_drag_style::Reorder`):
+it lifts to 1.03 over a deeper shadow and follows the pointer, the cards it
+passes glide aside, and on release it glides into its slot and the stack's
+order changes; leaving the column hands the gesture to the file drag.
+`--tool previews --select pile|pile-hover|pile-top|overflow|file-drag|file-drag-dock|file-drag-well|drag-close-top|reorder`
+renders it (the pile, overflow and file drag compared with the Tauri
+harness; the drag styles and reorder have no Tauri counterpart). Scrolling,
+the cues, Minimize and Expand were checked live through UI Automation with
+History's Restore on Windows 11 at 150%; the carry, the wheel, file drags,
+drag styles and reorders are unit- and
 render-checked only (not physically dragged). Close, Delete, Edit and Clear
 all show shipping's preview tooltips (a glass chip 6 DIPs above the control
 in bottom stacks, below it in top ones, fading in 120 ms, Clear all over

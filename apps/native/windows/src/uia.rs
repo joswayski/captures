@@ -13,7 +13,7 @@
 //! `aria-label`s; descriptions are help text. Providers are node ids that read
 //! live scene state on the UI thread.
 use captures_app::preferences::{
-    self, APPEARANCE_MODES, MINI_PREVIEW_PLACEMENTS, SECTIONS, THEMES,
+    self, APPEARANCE_MODES, MINI_PREVIEW_DRAG_STYLES, MINI_PREVIEW_PLACEMENTS, SECTIONS, THEMES,
 };
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -53,6 +53,9 @@ pub enum Id {
     /// Mini preview position (`role="radiogroup"`) and its corners.
     Placements,
     Placement(usize),
+    /// When you drag a preview out (`role="radiogroup"`) and its styles.
+    DragStyles,
+    DragStyle(usize),
     /// A utility row's Open: Windows keyboard settings or Send feedback.
     Open(Utility),
     /// Updates: the build identity text, the disabled Check Now and the
@@ -175,6 +178,7 @@ fn target(id: Id) -> Option<Target> {
         Id::Folder => Some(Target::Folder),
         Id::Choose => Some(Target::Choose),
         Id::Placement(i) => Some(Target::Placement(i)),
+        Id::DragStyle(i) => Some(Target::DragStyle(i)),
         Id::Open(which) => Some(Target::Open(which)),
         Id::Shortcut(i) => Some(Target::Shortcut(i)),
         Id::Select(key) => Some(Target::Select(key)),
@@ -198,6 +202,7 @@ fn id_of(target: Target) -> Id {
         Target::Folder => Id::Folder,
         Target::Choose => Id::Choose,
         Target::Placement(i) => Id::Placement(i),
+        Target::DragStyle(i) => Id::DragStyle(i),
         Target::Open(which) => Id::Open(which),
         Target::Shortcut(i) => Id::Shortcut(i),
         Target::Select(key) => Id::Select(key),
@@ -245,6 +250,7 @@ fn children(id: Id, live: Live) -> Vec<Id> {
                 Item::Accent => vec![Id::Accents],
                 Item::Folder => vec![Id::Folder, Id::Choose],
                 Item::Placement => vec![Id::Placements],
+                Item::DragStyle => vec![Id::DragStyles],
                 Item::Utility(which) => vec![Id::Open(which)],
                 Item::Updates => vec![Id::UpdateVersion, Id::UpdateAction, Id::UpdateStatus],
                 Item::CustomTheme if live.custom => vec![Id::CustomEditor],
@@ -266,6 +272,9 @@ fn children(id: Id, live: Live) -> Vec<Id> {
         Id::Placements => (0..MINI_PREVIEW_PLACEMENTS.len())
             .map(Id::Placement)
             .collect(),
+        Id::DragStyles => (0..MINI_PREVIEW_DRAG_STYLES.len())
+            .map(Id::DragStyle)
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -279,6 +288,8 @@ fn parent(id: Id) -> Option<Id> {
         Id::Accent(_) => Id::Accents,
         Id::Placement(_) => Id::Placements,
         Id::Placements => Id::Card(card_of(Item::Placement)?),
+        Id::DragStyle(_) => Id::DragStyles,
+        Id::DragStyles => Id::Card(card_of(Item::DragStyle)?),
         Id::Switch(row) => Id::Card(card_of(Item::Switch(row))?),
         Id::Modes => Id::Card(card_of(Item::Mode)?),
         Id::Accents => Id::Card(card_of(Item::Accent)?),
@@ -317,6 +328,7 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::Accents => scene.accent_rect(),
         Id::Folder => scene.field_rect(),
         Id::Placements => scene.placement_rect(),
+        Id::DragStyles => scene.drag_style_rect(),
         Id::UpdateVersion => scene.update_copy_rect(),
         Id::UpdateAction => scene.target_rect(Target::UpdateAction),
         Id::UpdateStatus => scene.update_rects().1,
@@ -347,6 +359,7 @@ fn name(host: &Host, id: Id) -> String {
         Id::Choose => "Choose…".into(),
         Id::Placements => preferences::MINI_PREVIEW_POSITION_LABEL.into(),
         Id::Placement(i) => MINI_PREVIEW_PLACEMENTS[i].1.into(),
+        Id::DragStyles | Id::DragStyle(_) => drag_style_name(id).unwrap_or_default().into(),
         // Shipping repeats "Open"; the row title tells the two apart.
         Id::Open(which) => format!("{} {}", which.copy().2, which.copy().0),
         Id::UpdateVersion | Id::UpdateAction | Id::UpdateStatus
@@ -394,6 +407,15 @@ fn name(host: &Host, id: Id) -> String {
     }
 }
 
+/// When you drag a preview out's group and option names.
+fn drag_style_name(id: Id) -> Option<&'static str> {
+    match id {
+        Id::DragStyles => Some(preferences::row("mini_preview_drag_style").title),
+        Id::DragStyle(i) => MINI_PREVIEW_DRAG_STYLES.get(i).map(|(_, name)| *name),
+        _ => None,
+    }
+}
+
 fn help(host: &Host, id: Id) -> String {
     match id {
         Id::Card(card) => crate::scene::card_description(CARDS[card].0),
@@ -401,6 +423,9 @@ fn help(host: &Host, id: Id) -> String {
         Id::Modes => preferences::row("appearance").description.into(),
         Id::Accents => preferences::row("theme").description.into(),
         Id::Placements => preferences::row("mini_preview_placement")
+            .description
+            .into(),
+        Id::DragStyles => preferences::row("mini_preview_drag_style")
             .description
             .into(),
         Id::Open(which) => which.copy().1.into(),
@@ -418,9 +443,13 @@ fn help(host: &Host, id: Id) -> String {
 fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
     match id {
         Id::Root => UIA_WindowControlTypeId,
-        Id::Nav | Id::Card(_) | Id::Modes | Id::Accents | Id::Placements => UIA_GroupControlTypeId,
+        Id::Nav | Id::Card(_) | Id::Modes | Id::Accents | Id::Placements | Id::DragStyles => {
+            UIA_GroupControlTypeId
+        }
         Id::Title | Id::Subtitle | Id::UpdateVersion | Id::UpdateStatus => UIA_TextControlTypeId,
-        Id::Mode(_) | Id::Accent(_) | Id::Placement(_) => UIA_RadioButtonControlTypeId,
+        Id::Mode(_) | Id::Accent(_) | Id::Placement(_) | Id::DragStyle(_) => {
+            UIA_RadioButtonControlTypeId
+        }
         Id::Folder => UIA_EditControlTypeId,
         Id::Select(_) => UIA_ComboBoxControlTypeId,
         Id::Option(..) => UIA_ListItemControlTypeId,
@@ -472,6 +501,8 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::Hex(i) => (29, i),
         Id::Placements => (30, 0),
         Id::Placement(i) => (31, i),
+        Id::DragStyles => (32, 0),
+        Id::DragStyle(i) => (33, i),
     };
     [UiaAppendRuntimeId as i32, kind, index as i32]
 }
@@ -482,6 +513,7 @@ fn selected(host: &Host, id: Id) -> bool {
         Id::Mode(i) => host.scene.mode_index() == i,
         Id::Accent(i) => host.scene.theme_index() == i,
         Id::Placement(i) => host.scene.placement_index() == i,
+        Id::DragStyle(i) => host.scene.drag_style_index() == i,
         Id::Option(key, i) => host.scene.select_index(key) == i,
         _ => false,
     }
@@ -595,8 +627,12 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             .contains(&pattern),
             Id::Option(..) => pattern == UIA_SelectionItemPatternId,
             Id::Switch(_) => pattern == UIA_TogglePatternId,
-            Id::Modes | Id::Accents | Id::Placements => pattern == UIA_SelectionPatternId,
-            Id::Mode(_) | Id::Accent(_) | Id::Placement(_) => pattern == UIA_SelectionItemPatternId,
+            Id::Modes | Id::Accents | Id::Placements | Id::DragStyles => {
+                pattern == UIA_SelectionPatternId
+            }
+            Id::Mode(_) | Id::Accent(_) | Id::Placement(_) | Id::DragStyle(_) => {
+                pattern == UIA_SelectionItemPatternId
+            }
             Id::ResetColors => pattern == UIA_InvokePatternId,
             Id::Well(_) => pattern == UIA_InvokePatternId || pattern == UIA_ValuePatternId,
             Id::FindPart(FindPart::Input) | Id::Hex(_) | Id::Folder => {
@@ -625,7 +661,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     .get(i)
                     .is_some_and(|(_, disabled)| !disabled),
                 Id::FindPart(part) => scene.find_enabled(part),
-                Id::Placements | Id::Placement(_) => scene.placement_enabled(),
+                Id::Placements | Id::Placement(_) | Id::DragStyles | Id::DragStyle(_) => {
+                    scene.placement_enabled()
+                }
                 _ => true,
             };
             let value = match id {
@@ -877,6 +915,7 @@ impl ISelectionProvider_Impl for Node_Impl {
                 Id::Nav => Id::NavItem(host.scene.active),
                 Id::Modes => Id::Mode(host.scene.mode_index()),
                 Id::Placements => Id::Placement(host.scene.placement_index()),
+                Id::DragStyles => Id::DragStyle(host.scene.drag_style_index()),
                 _ => Id::Accent(host.scene.theme_index()),
             })
         })?;
@@ -1267,6 +1306,47 @@ pub fn raise(events: &[(Event, bool, String)]) {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_drag_style_row_is_a_named_radio_group_after_the_placement_picker() {
+        let live = Live::default();
+        let card = parent(Id::Placements).expect("the Capture card");
+        let rows = children(card, live);
+        let at = rows.iter().position(|id| *id == Id::Placements).unwrap();
+        assert_eq!(rows[at + 1], Id::DragStyles);
+        assert_eq!(parent(Id::DragStyles), Some(card));
+        let options = children(Id::DragStyles, live);
+        assert_eq!(options, (0..3).map(Id::DragStyle).collect::<Vec<_>>());
+        assert_eq!(control_type(Id::DragStyles), UIA_GroupControlTypeId);
+        let names: Vec<_> = options
+            .iter()
+            .map(|&id| {
+                assert_eq!(control_type(id), UIA_RadioButtonControlTypeId);
+                assert_eq!(parent(id), Some(Id::DragStyles));
+                assert_eq!(id_of(target(id).unwrap()), id);
+                drag_style_name(id).unwrap()
+            })
+            .collect();
+        assert_eq!(names, ["Frosted imprint", "Dock gap", "Quiet well"]);
+        assert_eq!(
+            drag_style_name(Id::DragStyles),
+            Some("When you drag a preview out")
+        );
+        // Runtime ids stay unique.
+        let ids: Vec<_> = [Id::Placements, Id::Placement(0), Id::DragStyles]
+            .into_iter()
+            .chain(options.iter().copied())
+            .map(runtime_id)
+            .collect();
+        for (i, a) in ids.iter().enumerate() {
+            assert!(ids[i + 1..].iter().all(|b| b != a));
         }
     }
 }

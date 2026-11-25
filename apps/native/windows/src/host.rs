@@ -297,7 +297,14 @@ impl Host {
         (rc.right as f32 / s, rc.bottom as f32 / s)
     }
 
+    /// Preferences is on screen: visible and not minimized. Only then do
+    /// the drag style demos loop.
+    fn on_screen(&self) -> bool {
+        unsafe { IsWindowVisible(self.hwnd).as_bool() && !IsIconic(self.hwnd).as_bool() }
+    }
+
     fn frame(&mut self) -> Result<()> {
+        self.scene.demo_visible = self.on_screen();
         if std::mem::take(&mut self.scene.retheme) {
             // Custom colors changed; this frame lays out in the new palette.
             let need = self.need;
@@ -421,6 +428,13 @@ impl Host {
             gfx::draw_surface(surface, *size, scale, bleed, |dc| scene.draw(dc, g, i))?;
         }
         self.start_motions()?;
+        // The drag style demos redraw their tiles on the motion timer while
+        // they loop (`Scene::tick`); this frame may have brought them into
+        // view.
+        if self.scene.demos_animating() && !self.timer {
+            unsafe { SetTimer(Some(self.hwnd), TIMER_MOTION, 16, None) };
+            self.timer = true;
+        }
         if std::mem::take(&mut self.scene.caret_blink) {
             self.blink_caret()?;
         }
@@ -843,6 +857,7 @@ impl Host {
             // never ended and no frame ran.
             WM_APP_WAKE => {}
             WM_TIMER if wp.0 == TIMER_MOTION => {
+                self.scene.demo_visible = self.on_screen();
                 if !self.scene.tick() {
                     unsafe {
                         let _ = KillTimer(Some(self.hwnd), TIMER_MOTION);
@@ -1031,6 +1046,19 @@ impl Host {
                 self.need = true;
             }
             WM_CHAR if self.scene.text_focused() => self.text_char(wp.0 as u16),
+            // Type-ahead on a focused drag style picks the style it names.
+            WM_CHAR if matches!(self.scene.focus, Some(Target::DragStyle(_))) => {
+                let next = char::from_u32(wp.0 as u32)
+                    .filter(|c| !c.is_control())
+                    .and_then(|ch| self.scene.choice_type_ahead(ch));
+                match next {
+                    Some(next) => {
+                        self.scene.set_focus(Some(next), true);
+                        self.activate(next);
+                    }
+                    None => return None,
+                }
+            }
             WM_CHAR if self.scene.open.is_some() => {
                 if let Some(ch) = char::from_u32(wp.0 as u32).filter(|c| !c.is_control())
                     && self.scene.type_ahead(ch)

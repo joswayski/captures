@@ -188,7 +188,12 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             // The bottom-left stack over the desktop, as the 1280×800 mock.
             let stack = crate::previews::fixture(&g, &desktop, options.select.as_deref());
             let size = (w as f32, h as f32);
-            let top = size.1 - stack.height;
+            // An expanded top stack hangs from the top edge.
+            let top = if stack.top && !stack.collapsed() {
+                0.
+            } else {
+                size.1 - stack.height
+            };
             Box::new(move |dc| unsafe {
                 dc.DrawBitmap(
                     &frozen,
@@ -426,6 +431,12 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             .and_then(captures_app::capture_menu::PreferenceTarget::from_id)
         {
             scene.reveal_target(target);
+        }
+        // `--select drag-style` scrolls When you drag a preview out into view.
+        if options.select.as_deref() == Some("drag-style") {
+            let tile = scene.target_rect(crate::scene::Target::DragStyle(0));
+            let top = scene.scroll_now() + tile.y - scene.viewport().y - 200.;
+            scene.set_scroll(top, false);
         }
         if let Some(query) = &options.find {
             // As if Ctrl+F was pressed and the query typed.

@@ -15,14 +15,16 @@ use captures_app::controls::select;
 use captures_app::motion::CubicBezier;
 use captures_app::preferences::{
     self, APPEARANCE_MODES, COUNTDOWN_SECONDS, GIF_FPS, GIF_MAX_WIDTHS, GIF_PALETTE_COLORS,
-    MINI_PREVIEW_PLACEMENTS, RECORDING_FORMATS, RECORDING_FPS, RECORDING_TOGGLES, RESOLUTIONS,
-    SCREENSHOT_FORMATS, SECTIONS, SHORTCUT_ROWS, THEMES,
+    MINI_PREVIEW_DRAG_STYLES, MINI_PREVIEW_PLACEMENTS, RECORDING_FORMATS, RECORDING_FPS,
+    RECORDING_TOGGLES, RESOLUTIONS, SCREENSHOT_FORMATS, SECTIONS, SHORTCUT_ROWS, THEMES,
 };
+use captures_app::preview_drag_style::{self as drag_style, CardPose, DragStyle};
 use captures_app::shortcuts::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
 };
-use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
+use windows::Win32::Graphics::Direct2D::{D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, ID2D1DeviceContext};
 use windows::core::Result;
+use windows_numerics::Matrix3x2;
 
 use crate::gfx::{self, Gfx, Style, Text, rect};
 use crate::textfield::{Change, Editor, TextField};
@@ -153,6 +155,9 @@ pub enum Item {
     Folder,
     /// Mini preview position: shipping `MiniPreviewPlacementPicker`.
     Placement,
+    /// When you drag a preview out: the three drag styles as option tiles,
+    /// each with its looping demo.
+    DragStyle,
     /// A `.settings-utility-row`: copy and an Open button.
     Utility(Utility),
     /// The `.shortcut-list` of recorders, in `SHORTCUT_ROWS` order.
@@ -277,6 +282,7 @@ pub const CARDS: [(usize, &[Item]); 8] = [
             Item::Switch(2),
             Item::Switch(3),
             Item::Placement,
+            Item::DragStyle,
             Item::Switch(4),
             Item::Switch(5),
             Item::Switch(6),
@@ -318,6 +324,11 @@ pub const FLAGS: [&str; 7] = [
 const PLACEMENT_SCREEN: (f32, f32) = (108., 72.);
 const PLACEMENT_INSET: f32 = 8.;
 const PLACEMENT_CORNER: f32 = 22.;
+/// Between the drag style tiles, and between a tile's demo and its name.
+const DRAG_TILE_GAP: f32 = 12.;
+/// The demo cards' corners and the glyph's size in the demo's points.
+const DEMO_RADIUS: f32 = 4.;
+const DEMO_GLYPH: f32 = 0.6;
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct Rect {
@@ -374,6 +385,8 @@ pub enum Target {
     Choose,
     /// A Mini preview position corner, in `MINI_PREVIEW_PLACEMENTS` order.
     Placement(usize),
+    /// A drag style tile, in `MINI_PREVIEW_DRAG_STYLES` order.
+    DragStyle(usize),
     /// A utility row's Open.
     Open(Utility),
     /// A shortcut recorder, in `SHORTCUT_ROWS` order.
@@ -489,6 +502,8 @@ pub enum Kind {
     PlacementCorner(usize),
     /// The picker's `small` placement name, right-aligned under the screen.
     PlacementLabel,
+    /// A drag style option tile: its demo frame, name and selection ring.
+    DragTile(usize),
     /// `.directory-input button`, resting or hovered.
     Choose {
         lit: bool,
@@ -889,6 +904,8 @@ struct Texts {
     check: Option<Text>,
     choose: Option<Text>,
     placement: Option<Text>,
+    /// The drag style names, in `MINI_PREVIEW_DRAG_STYLES` order.
+    drag_names: Vec<Text>,
     /// Utility row actions, by `Utility::index`.
     open: [Option<Text>; 2],
     update_action: Option<Text>,
@@ -976,6 +993,17 @@ pub struct Scene {
     placement_screen: usize,
     corners: [usize; 4],
     placement_label: usize,
+    /// When you drag a preview out: copy, the tile group and its tiles.
+    drag_copy: usize,
+    drag_group: usize,
+    drag_tiles: [usize; 3],
+    /// The demo area's height inside each tile (the name sits below).
+    drag_area_h: f32,
+    /// When the demos' loop started.
+    demo_start: Instant,
+    /// Preferences shows on screen (visible, not minimized): the demos only
+    /// loop then. The host keeps it current; offscreen renders hold them.
+    pub demo_visible: bool,
     /// Utility rows' copy and Open, by `Utility::index`.
     utility_copy: [usize; 2],
     open_buttons: [Layered; 2],
@@ -1142,6 +1170,12 @@ impl Scene {
             placement_screen: 0,
             corners: [0; 4],
             placement_label: 0,
+            drag_copy: 0,
+            drag_group: 0,
+            drag_tiles: [0; 3],
+            drag_area_h: 0.,
+            demo_start: Instant::now(),
+            demo_visible: false,
             utility_copy: [0; 2],
             open_buttons: [none; 2],
             update_copy: 0,
@@ -1384,6 +1418,18 @@ impl Scene {
                         self.placement = group;
                         self.placement_screen = screen;
                     }
+                    Item::DragStyle => {
+                        self.drag_copy = copy;
+                        let group = self.add(Some(node), Kind::Group, 0.);
+                        self.nodes[group].group_opacity = true;
+                        let radius = self.t.n("r-md");
+                        for index in 0..MINI_PREVIEW_DRAG_STYLES.len() {
+                            let tile = self.add(Some(group), Kind::DragTile(index), 0.);
+                            self.ring(tile, Ring::Full(radius), Target::DragStyle(index));
+                            self.drag_tiles[index] = tile;
+                        }
+                        self.drag_group = group;
+                    }
                     Item::Utility(which) => {
                         self.utility_copy[which.index()] = copy;
                         let open = |lit| Kind::Open { which, lit };
@@ -1557,6 +1603,7 @@ impl Scene {
         }
         // `.mini-preview-placement.is-disabled`.
         self.nodes[self.placement].opacity = if self.placement_enabled() { 1. } else { 0.55 };
+        self.nodes[self.drag_group].opacity = if self.placement_enabled() { 1. } else { 0.55 };
         for node in &mut self.nodes {
             node.props = true;
         }
@@ -1657,6 +1704,37 @@ impl Scene {
             .iter()
             .position(|(placement, _)| id.as_str() == Some(*placement))
             .unwrap_or(2)
+    }
+
+    /// The selected drag style tile.
+    pub fn drag_style_index(&self) -> usize {
+        let id = serde_json::to_value(self.settings.mini_preview_drag_style).unwrap_or_default();
+        MINI_PREVIEW_DRAG_STYLES
+            .iter()
+            .position(|(style, _)| id.as_str() == Some(*style))
+            .unwrap_or(0)
+    }
+
+    /// Whether the drag style demos loop now: Preferences is on screen, the
+    /// row is enabled and in view, and Windows animates. Otherwise each
+    /// tile holds its mid-drag frame.
+    pub fn demos_animating(&self) -> bool {
+        if !self.demo_visible || self.reduced_motion || !self.placement_enabled() {
+            return false;
+        }
+        let (tile, view) = (self.absolute(self.drag_group), self.viewport_rect());
+        tile.h > 0. && tile.y < view.y + view.h && tile.y + tile.h > view.y
+    }
+
+    /// The next demo frame is due: the tiles redraw.
+    fn advance_demos(&mut self) -> bool {
+        let animating = self.demos_animating();
+        if animating {
+            for tile in self.drag_tiles {
+                self.nodes[tile].dirty = true;
+            }
+        }
+        animating
     }
 
     /// The selected Interface theme segment.
@@ -2261,6 +2339,60 @@ impl Scene {
                 self.texts.placement = Some(label);
                 Ok(content_h)
             }
+            Item::DragStyle => {
+                // The copy, then the three tiles in a row `--s-4` below:
+                // each the demo (`DEMO_SIZE`, narrower when the card is) and
+                // its name under it.
+                let row = preferences::row("mini_preview_drag_style");
+                let title = g.text(&self.t, Style::RowTitle, row.title, width)?;
+                let detail = g.text(
+                    &self.t,
+                    Style::RowDescription,
+                    row.description,
+                    width.min(measure),
+                )?;
+                let copy_h = title.height + 3. + detail.height;
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: Some(detail),
+                    gap: 3.,
+                });
+                self.nodes[self.drag_copy].rect = Rect::new(x, y, width, copy_h);
+                self.texts.drag_names = MINI_PREVIEW_DRAG_STYLES
+                    .iter()
+                    .map(|(_, name)| g.text(&self.t, Style::Option, name, 1e4))
+                    .collect::<Result<_>>()?;
+                let count = MINI_PREVIEW_DRAG_STYLES.len() as f32;
+                let (demo_w, demo_h) = (
+                    drag_style::DEMO_SIZE.0 as f32,
+                    drag_style::DEMO_SIZE.1 as f32,
+                );
+                let tile_w = demo_w.min((width - (count - 1.) * DRAG_TILE_GAP) / count);
+                let area_h = (demo_h * tile_w / demo_w).round();
+                let name_h = self
+                    .texts
+                    .drag_names
+                    .iter()
+                    .map(|text| text.height)
+                    .fold(0., f32::max);
+                let tile_h = area_h + s3 + name_h;
+                self.drag_area_h = area_h;
+                self.nodes[self.drag_group].rect = Rect::new(
+                    x,
+                    y + copy_h + s4,
+                    count * tile_w + (count - 1.) * DRAG_TILE_GAP,
+                    tile_h,
+                );
+                for (index, &tile) in self.drag_tiles.iter().enumerate() {
+                    let r = Rect::new(index as f32 * (tile_w + DRAG_TILE_GAP), 0., tile_w, tile_h);
+                    self.nodes[tile].rect = r;
+                    for &child in &self.children[tile] {
+                        self.nodes[child].rect = Rect::new(0., 0., tile_w, area_h);
+                    }
+                }
+                Ok(copy_h + s4 + tile_h)
+            }
             Item::Utility(which) => {
                 // `.settings-utility-row`: copy, then the `auto` action.
                 let (title, body, action) = which.copy();
@@ -2703,7 +2835,8 @@ impl Scene {
         let now = Instant::now();
         self.follow();
         self.motions.retain(|m| m.progress(now) < 1.);
-        !self.motions.is_empty()
+        let demos = self.advance_demos();
+        !self.motions.is_empty() || demos
     }
 
     fn curve(&self, name: &str) -> CubicBezier {
@@ -2790,6 +2923,9 @@ impl Scene {
             if let Target::Placement(index) = target {
                 self.nodes[self.corners[index]].dirty = true;
             }
+            if let Target::DragStyle(index) = target {
+                self.nodes[self.drag_tiles[index]].dirty = true;
+            }
         }
         self.refresh(true);
     }
@@ -2872,6 +3008,11 @@ impl Scene {
                         list.extend((0..MINI_PREVIEW_PLACEMENTS.len()).map(Target::Placement));
                     }
                     Item::Placement => {}
+                    // A radio group: one Tab stop, at the selection.
+                    Item::DragStyle if self.placement_enabled() => {
+                        list.push(Target::DragStyle(self.drag_style_index()));
+                    }
+                    Item::DragStyle => {}
                     Item::Utility(which) => list.push(Target::Open(which)),
                     // A disabled button is not a Tab stop.
                     Item::Updates if self.update_enabled() => list.push(Target::UpdateAction),
@@ -2898,7 +3039,9 @@ impl Scene {
     /// A control that takes focus when clicked: Tab stops, and any member of
     /// a radio group (arrows move between them).
     pub fn takes_focus(&self, target: Target) -> bool {
-        matches!(target, Target::Mode(_) | Target::Theme(_)) || self.focusable().contains(&target)
+        matches!(target, Target::Mode(_) | Target::Theme(_))
+            || (matches!(target, Target::DragStyle(_)) && self.placement_enabled())
+            || self.focusable().contains(&target)
     }
 
     /// Left/Up or Right/Down inside a radio group: the neighbouring choice,
@@ -2914,6 +3057,10 @@ impl Scene {
         match self.focus? {
             Target::Mode(index) => Some(Target::Mode(step(index, APPEARANCE_MODES.len()))),
             Target::Theme(index) => Some(Target::Theme(step(index, THEMES.len()))),
+            Target::DragStyle(index) => Some(Target::DragStyle(step(
+                index,
+                MINI_PREVIEW_DRAG_STYLES.len(),
+            ))),
             _ => None,
         }
     }
@@ -2924,6 +3071,7 @@ impl Scene {
         let group = |target: Target| match target {
             Target::Mode(_) => Target::Mode(0),
             Target::Theme(_) => Target::Theme(0),
+            Target::DragStyle(_) => Target::DragStyle(0),
             other => other,
         };
         let index = self
@@ -2980,6 +3128,7 @@ impl Scene {
                 Some(Action::ChooseFolder)
             }
             Target::Placement(index) => self.select_placement(index),
+            Target::DragStyle(index) => self.select_drag_style(index),
             Target::Open(Utility::Keyboard) => Some(Action::KeyboardSettings),
             Target::Open(Utility::Feedback) => Some(Action::Feedback),
             Target::Shortcut(index) => {
@@ -3235,6 +3384,56 @@ impl Scene {
         None
     }
 
+    /// Choose what a dragged preview's slot shows. The stack reads it when
+    /// the next drag begins.
+    fn select_drag_style(&mut self, index: usize) -> Option<Action> {
+        if !self.placement_enabled() || index == self.drag_style_index() {
+            return None;
+        }
+        let id = MINI_PREVIEW_DRAG_STYLES[index].0;
+        self.settings.mini_preview_drag_style =
+            serde_json::from_value(serde_json::json!(id)).ok()?;
+        self.save();
+        for tile in self.drag_tiles {
+            self.nodes[tile].dirty = true;
+        }
+        self.events.push(Event::Selected(Target::DragStyle(index)));
+        None
+    }
+
+    /// Type-ahead on a focused drag style: the next style whose name starts
+    /// with the keys typed within the last second, focused and selected.
+    pub fn choice_type_ahead(&mut self, ch: char) -> Option<Target> {
+        let Some(Target::DragStyle(current)) = self.focus else {
+            return None;
+        };
+        let now = Instant::now();
+        let (prefix, last) = &mut self.type_ahead;
+        if last.is_none_or(|t| now.duration_since(t).as_secs_f32() > TYPE_AHEAD_SECONDS) {
+            prefix.clear();
+        }
+        if prefix.is_empty() && ch == ' ' {
+            return None;
+        }
+        prefix.extend(ch.to_lowercase());
+        *last = Some(now);
+        let count = MINI_PREVIEW_DRAG_STYLES.len();
+        let start = if prefix.chars().count() == 1 {
+            current + 1
+        } else {
+            current
+        };
+        (0..count)
+            .map(|k| (start + k) % count)
+            .find(|&i| {
+                MINI_PREVIEW_DRAG_STYLES[i]
+                    .1
+                    .to_lowercase()
+                    .starts_with(prefix.as_str())
+            })
+            .map(Target::DragStyle)
+    }
+
     fn toggle(&mut self, row: usize) -> Option<Action> {
         if !self.rows[row].enabled {
             return None;
@@ -3323,11 +3522,15 @@ impl Scene {
         if !enabled && matches!(self.focus, Some(Target::Placement(_))) {
             self.set_focus(None, false);
         }
-        let group = self.placement;
-        self.nodes[group].opacity = if enabled { 1. } else { 0.55 };
-        self.nodes[group].props = true;
-        for corner in self.corners {
-            self.nodes[corner].dirty = true;
+        if !enabled && matches!(self.focus, Some(Target::DragStyle(_))) {
+            self.set_focus(None, false);
+        }
+        for group in [self.placement, self.drag_group] {
+            self.nodes[group].opacity = if enabled { 1. } else { 0.55 };
+            self.nodes[group].props = true;
+        }
+        for node in self.corners.into_iter().chain(self.drag_tiles) {
+            self.nodes[node].dirty = true;
         }
     }
 
@@ -4113,6 +4316,11 @@ impl Scene {
                 let name = MINI_PREVIEW_PLACEMENTS[self.placement_index()].1;
                 vec![format!("{}{}{name}", r.title, r.description)]
             }
+            Item::DragStyle => {
+                let r = row("mini_preview_drag_style");
+                let names: String = MINI_PREVIEW_DRAG_STYLES.iter().map(|(_, n)| *n).collect();
+                vec![format!("{}{}{names}", r.title, r.description)]
+            }
             Item::Utility(which) => {
                 let (title, body, action) = which.copy();
                 vec![format!("{title}{body}{action}")]
@@ -4607,6 +4815,7 @@ impl Scene {
             Target::Folder => self.field,
             Target::Choose => self.choose.base,
             Target::Placement(i) => self.corners[i],
+            Target::DragStyle(i) => self.drag_tiles[i],
             Target::Open(which) => self.open_buttons[which.index()].base,
             Target::Shortcut(i) => self.shortcuts[i].recorder,
             Target::Select(key) => self.selects[key.index()].trigger,
@@ -4790,6 +4999,11 @@ impl Scene {
         self.absolute(self.placement_screen)
     }
 
+    /// The drag style tiles (`role="radiogroup"`).
+    pub fn drag_style_rect(&self) -> Rect {
+        self.absolute(self.drag_group)
+    }
+
     pub fn viewport(&self) -> Rect {
         self.viewport_rect()
     }
@@ -4862,6 +5076,11 @@ impl Scene {
             .chain(
                 (0..MINI_PREVIEW_PLACEMENTS.len())
                     .map(Target::Placement)
+                    .filter(|_| self.placement_enabled()),
+            )
+            .chain(
+                (0..MINI_PREVIEW_DRAG_STYLES.len())
+                    .map(Target::DragStyle)
                     .filter(|_| self.placement_enabled()),
             )
             .chain((0..SHORTCUT_ROWS.len()).map(Target::Shortcut))
@@ -5080,6 +5299,7 @@ impl Scene {
                     gfx::text(dc, label, 0., 0., c("text-subtle"))?;
                 }
             }
+            Kind::DragTile(index) => self.draw_drag_tile(dc, g, index, w)?,
             Kind::Choose { lit } | Kind::Open { lit, .. } | Kind::Reset { lit } => {
                 let radius = t.n("r-md");
                 let (bg, edge) = if lit {
@@ -5388,6 +5608,51 @@ impl Scene {
                 }
                 gfx::fill_round(dc, all, radius, c("surface-selected"))?;
             }
+        }
+        Ok(())
+    }
+
+    /// A drag style option tile: the style's demo frame in a sunken screen
+    /// (an accent ring when selected, a stronger border while hovered), and
+    /// its name centred below.
+    fn draw_drag_tile(&self, dc: &ID2D1DeviceContext, g: &Gfx, index: usize, w: f32) -> Result<()> {
+        let t = &self.t;
+        let radius = t.n("r-md");
+        let area = rect(0., 0., w, self.drag_area_h);
+        let selected = index == self.drag_style_index();
+        let enabled = self.placement_enabled();
+        let hovered = enabled && self.hover == Some(Target::DragStyle(index));
+        // Previews always float on the fixed glass palette, so the demo's
+        // desktop is the same dark glass in either appearance.
+        gfx::fill_round(dc, area, radius, t.color("glass-raised-solid"))?;
+        let style = [DragStyle::Frosted, DragStyle::Dock, DragStyle::Well][index];
+        let elapsed = self.demo_start.elapsed().as_secs_f64() * 1000.;
+        let demo = drag_style::demo(style, elapsed, !self.demos_animating());
+        unsafe { dc.PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let mut base = Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        let k = w / drag_style::DEMO_SIZE.0 as f32;
+        unsafe { dc.SetTransform(&(Matrix3x2::scale(k, k) * base)) };
+        let drawn = draw_demo(dc, g, t, &demo);
+        unsafe {
+            dc.SetTransform(&base);
+            dc.PopAxisAlignedClip();
+        }
+        drawn?;
+        if selected {
+            gfx::border(dc, area, radius, 2., t.color("theme-accent"))?;
+        } else {
+            let edge = if hovered {
+                "border-strong"
+            } else {
+                "border-subtle"
+            };
+            gfx::border(dc, area, radius, 1., t.color(edge))?;
+        }
+        if let Some(name) = self.texts.drag_names.get(index) {
+            let color = if selected { "text" } else { "text-subtle" };
+            let y = self.drag_area_h + t.n("s-3");
+            gfx::text(dc, name, ((w - name.width) / 2.).max(0.), y, t.color(color))?;
         }
         Ok(())
     }
@@ -5898,6 +6163,184 @@ fn flag_detail(settings: &captures_settings::AppSettings, flag: usize) -> (Strin
     }
 }
 
+/// One Preferences demo frame in tile points: three small glass cards with
+/// a two-tone screenshot, the middle one under the frame's pose, and the
+/// drag image above them.
+fn draw_demo(dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens, demo: &drag_style::Demo) -> Result<()> {
+    let left = drag_style::demo_card_left() as f32;
+    let (cw, ch) = (
+        drag_style::DEMO_CARD.0 as f32,
+        drag_style::DEMO_CARD.1 as f32,
+    );
+    for (index, &top) in demo.card_tops.iter().enumerate() {
+        let pose = if index == 1 {
+            demo.pose
+        } else {
+            CardPose::REST
+        };
+        let r = rect(left, top as f32, left + cw, top as f32 + ch);
+        demo_card(dc, g, t, r, pose, 1.)?;
+    }
+    if demo.ghost_opacity > 0. {
+        let (x, y) = (demo.ghost.0 as f32, demo.ghost.1 as f32);
+        let r = rect(x, y, x + cw, y + ch);
+        demo_card(dc, g, t, r, CardPose::REST, demo.ghost_opacity as f32)?;
+    }
+    Ok(())
+}
+
+/// A demo card at `r` under `pose`, faded by `alpha`.
+fn demo_card(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    t: &Tokens,
+    r: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F,
+    pose: CardPose,
+    alpha: f32,
+) -> Result<()> {
+    let opacity = pose.opacity as f32 * alpha;
+    if opacity <= 0.005 {
+        return Ok(());
+    }
+    let mut base = Matrix3x2::identity();
+    unsafe { dc.GetTransform(&mut base) };
+    let (cx, cy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+    let s = pose.scale as f32;
+    let posed = Matrix3x2 {
+        M11: s,
+        M12: 0.,
+        M21: 0.,
+        M22: s,
+        M31: cx - s * cx,
+        M32: cy - s * cy,
+    } * base;
+    unsafe { dc.SetTransform(&posed) };
+    let drawn = crate::previews::faded(dc, opacity, || {
+        let chrome = pose.chrome_opacity as f32;
+        if chrome > 0. {
+            let shadow = crate::tokens::Shadow {
+                x: 0.,
+                y: 2.,
+                blur: 5.,
+                spread: 0.,
+                color: [0., 0., 0., 0.32 * chrome],
+            };
+            gfx::shadow(dc, r, DEMO_RADIUS, &[shadow])?;
+        }
+        let fill = pose.fill_opacity as f32;
+        if fill > 0. {
+            gfx::fill_round(
+                dc,
+                r,
+                DEMO_RADIUS,
+                t.color_alpha("glass-strong-solid", fill),
+            )?;
+        }
+        demo_media(dc, r, pose)?;
+        crate::previews::paint_well(dc, t, (r, DEMO_RADIUS), pose)?;
+        if chrome > 0. {
+            // The size chip and the 1 px white ring.
+            let chip = rect(r.left + 3., r.bottom - 7., r.left + 17., r.bottom - 3.);
+            gfx::fill_round(
+                dc,
+                chip,
+                1.5,
+                windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+                    r: 10. / 255.,
+                    g: 10. / 255.,
+                    b: 14. / 255.,
+                    a: 0.66 * chrome,
+                },
+            )?;
+            gfx::ring(
+                dc,
+                r,
+                DEMO_RADIUS,
+                0.,
+                1.,
+                windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+                    r: 1.,
+                    g: 1.,
+                    b: 1.,
+                    a: 0.08 * chrome,
+                },
+            )?;
+        }
+        crate::previews::paint_glyph(dc, g, t, r, pose, DEMO_GLYPH)
+    });
+    unsafe { dc.SetTransform(&base) };
+    drawn
+}
+
+/// The demo's "screenshot": a sky over a darker ground and a light window,
+/// inside the card's rounded corners. Its blur softens the edges between
+/// them (a vertical blend as wide as the blur), which reads as the frost at
+/// this size without an effect per frame.
+fn demo_media(
+    dc: &ID2D1DeviceContext,
+    r: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F,
+    pose: CardPose,
+) -> Result<()> {
+    let opacity = pose.media_opacity as f32;
+    if opacity <= 0. {
+        return Ok(());
+    }
+    let (w, h) = (r.right - r.left, r.bottom - r.top);
+    let s = pose.media_scale as f32;
+    let (cx, cy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+    let m = |x: f32, y: f32| (cx + (x - cx) * s, cy + (y - cy) * s);
+    let blur = pose.media_blur as f32;
+    // Sky over ground (the card's rounded rect, the sky's lower corners
+    // squared off), then the window, each softened by the blur.
+    let (sky, ground, window) = (0x5b78b8, 0x2f3a52, 0xd9e2f2);
+    let mid = (cy + (r.top + h * 0.62 - cy) * s - blur).clamp(r.top + DEMO_RADIUS, r.bottom);
+    gfx::fill_round(dc, r, DEMO_RADIUS, rgb(ground, opacity))?;
+    gfx::fill_round(
+        dc,
+        rect(r.left, r.top, r.right, mid),
+        DEMO_RADIUS,
+        rgb(sky, opacity),
+    )?;
+    gfx::fill(
+        dc,
+        rect(r.left, r.top + DEMO_RADIUS, r.right, mid),
+        rgb(sky, opacity),
+    )?;
+    // The blend band: three steps from sky to ground.
+    if blur > 0.05 {
+        let band = (2. * blur / 3.).min((r.bottom - DEMO_RADIUS - mid) / 3.);
+        for k in 0..3 {
+            let a = opacity * (1. - (k as f32 + 0.5) / 3.);
+            let y = mid + band * k as f32;
+            gfx::fill(dc, rect(r.left, y, r.right, y + band), rgb(sky, a))?;
+        }
+    }
+    let (wl, wt) = m(r.left + w * 0.18, r.top + h * 0.22);
+    let (wr, wb) = m(r.left + w * 0.56, r.top + h * 0.72);
+    let soft = 1. / (1. + blur);
+    gfx::fill_round(
+        dc,
+        rect(
+            wl - blur * 0.5,
+            wt - blur * 0.5,
+            wr + blur * 0.5,
+            wb + blur * 0.5,
+        ),
+        1.5 + blur,
+        rgb(window, opacity * (0.35 + 0.55 * soft)),
+    )
+}
+
+/// An opaque `0xRRGGBB` colour at `a`.
+fn rgb(rgb: u32, a: f32) -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+    windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+        r: ((rgb >> 16) & 0xff) as f32 / 255.,
+        g: ((rgb >> 8) & 0xff) as f32 / 255.,
+        b: (rgb & 0xff) as f32 / 255.,
+        a,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5911,6 +6354,7 @@ mod tests {
                 Item::Folder => "output_directory",
                 Item::Switch(row) => FLAGS[row - 1],
                 Item::Placement => "mini_preview_placement",
+                Item::DragStyle => "mini_preview_drag_style",
                 Item::Select(key) => key.setting(),
                 other => panic!("unexpected {other:?}"),
             })
@@ -5924,6 +6368,7 @@ mod tests {
                 "auto_start_on_selection",
                 "show_mini_previews",
                 "mini_preview_placement",
+                "mini_preview_drag_style",
                 "include_mini_previews_in_captures",
                 "include_recording_controls_in_captures",
                 "freeze_screen",
@@ -5983,6 +6428,81 @@ mod tests {
         scene.clear_target_highlight();
         assert_eq!(scene.target_highlight, None);
         assert!(!scene.nodes[node].visible);
+    }
+
+    #[test]
+    fn the_drag_style_row_is_one_radio_group_that_saves_and_follows_show_mini_previews() {
+        let tokens = crate::appearance::tokens(Some("dark"), &Default::default());
+        let g = Gfx::new(&tokens, false).unwrap();
+        let file = std::env::temp_dir().join("captures-drag-style-settings.json");
+        let _ = std::fs::remove_file(&file);
+        let mut scene = Scene::new(tokens, file.clone(), String::new());
+        scene.layout(&g, 900., 600.).unwrap();
+        // Frosted imprint is the default; the group is one Tab stop at it.
+        assert_eq!(scene.drag_style_index(), 0);
+        let stops: Vec<Target> = scene
+            .focusable()
+            .into_iter()
+            .filter(|t| matches!(t, Target::DragStyle(_)))
+            .collect();
+        assert_eq!(stops, [Target::DragStyle(0)]);
+        // Focus (with its ring) scrolls the row into view. The three tiles
+        // sit in a row right below the Mini preview position.
+        scene.set_focus(Some(Target::DragStyle(0)), true);
+        let placement = scene.placement_rect();
+        let tiles: Vec<Rect> = (0..3)
+            .map(|i| scene.target_rect(Target::DragStyle(i)))
+            .collect();
+        assert!(tiles[0].y > placement.y + placement.h);
+        assert!(tiles[0].x < tiles[1].x && tiles[1].x < tiles[2].x);
+        assert_eq!(tiles[0].w, drag_style::DEMO_SIZE.0 as f32);
+        let (cx, cy) = (tiles[2].x + 20., tiles[2].y + 20.);
+        assert_eq!(scene.hit(cx, cy), Some(Target::DragStyle(2)));
+        // Arrows step and wrap; activating saves the persisted value.
+        assert_eq!(scene.choice_step(false), Some(Target::DragStyle(2)));
+        assert_eq!(scene.choice_step(true), Some(Target::DragStyle(1)));
+        scene.activate(Target::DragStyle(1));
+        assert_eq!(scene.drag_style_index(), 1);
+        assert!(
+            scene
+                .events
+                .contains(&Event::Selected(Target::DragStyle(1)))
+        );
+        let saved = captures_settings::load(&file).unwrap();
+        assert_eq!(
+            saved.mini_preview_drag_style,
+            captures_settings::MiniPreviewDragStyle::Dock
+        );
+        // Type-ahead jumps to the style it names.
+        scene.set_focus(Some(Target::DragStyle(1)), true);
+        assert_eq!(scene.choice_type_ahead('q'), Some(Target::DragStyle(2)));
+        // Find matches the row by its style names.
+        let text = scene.find_texts(Item::DragStyle).concat();
+        assert!(text.contains("When you drag a preview out") && text.contains("Quiet well"));
+        // Show mini previews off: dimmed, out of Tab order, untouchable,
+        // and focus leaves it; the demos hold still.
+        scene.demo_visible = true;
+        assert!(scene.demos_animating() || scene.reduced_motion);
+        let row = FLAGS
+            .iter()
+            .position(|k| *k == "show_mini_previews")
+            .unwrap()
+            + 1;
+        scene.activate(Target::Row(row));
+        assert!(!scene.placement_enabled());
+        assert_eq!(scene.nodes[scene.drag_group].opacity, 0.55);
+        assert!(
+            scene
+                .focusable()
+                .iter()
+                .all(|t| !matches!(t, Target::DragStyle(_)))
+        );
+        assert_eq!(scene.hit(cx, cy), None);
+        assert_eq!(scene.focus, None);
+        assert!(!scene.demos_animating());
+        assert!(scene.activate(Target::DragStyle(0)).is_none());
+        assert_eq!(scene.drag_style_index(), 1);
+        let _ = std::fs::remove_file(&file);
     }
 
     #[test]

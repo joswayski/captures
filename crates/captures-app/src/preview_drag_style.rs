@@ -228,6 +228,24 @@ impl DragOut {
         }
     }
 
+    /// Whether the pose still changes at `now_ms`: easing into the style,
+    /// or playing an end that has not finished. Hosts may stop redrawing
+    /// the card while this is false.
+    pub fn moving(&self, now_ms: f64) -> bool {
+        match self.end {
+            Some(_) => !self.finished(now_ms),
+            None => {
+                let away_ms = match self.style {
+                    DragStyle::Frosted => FROST_IN_MS,
+                    // The glyph settles 80 ms after the well.
+                    DragStyle::Well => WELL_IN_MS + 80.,
+                    DragStyle::Dock => DOCK_LIFT_MS + SLOT_CLOSE_MS.max(DOCK_LEAVE_MS),
+                };
+                !self.reduced && now_ms - self.began_ms < away_ms
+            }
+        }
+    }
+
     /// Whether the end has finished: the card is back at rest, or gone with
     /// its slot closed. Hosts then drop this and commit the outcome.
     pub fn finished(&self, now_ms: f64) -> bool {
@@ -681,6 +699,37 @@ mod tests {
         let done = 1_000. + DragOut::end_ms(DragStyle::Dock, DragEnd::Returned);
         assert!(drag.finished(done));
         assert_eq!(drag.pose(done), CardPose::REST);
+    }
+
+    #[test]
+    fn hosts_may_stop_redrawing_once_the_pose_stops_moving() {
+        for style in [DragStyle::Frosted, DragStyle::Dock, DragStyle::Well] {
+            let mut drag = DragOut::new(style, 0., false);
+            assert!(drag.moving(10.), "{style:?} eases out");
+            // Step until it stops: the pose must already be the final one.
+            let still = (0..200)
+                .map(|i| i as f64 * 10.)
+                .find(|t| !drag.moving(*t))
+                .unwrap();
+            assert_eq!(
+                drag.pose(still),
+                drag.pose(60_000.),
+                "{style:?} stopped early"
+            );
+            assert_ne!(
+                drag.pose(still - 20.),
+                drag.pose(60_000.),
+                "{style:?} stopped late"
+            );
+            drag.end(DragEnd::Returned, 5_000.);
+            assert!(drag.moving(5_010.), "{style:?} plays its return");
+            let back = 5_000. + DragOut::end_ms(style, DragEnd::Returned);
+            assert!(!drag.moving(back));
+            assert!(
+                !DragOut::new(style, 0., true).moving(0.),
+                "reduced motion holds still"
+            );
+        }
     }
 
     #[test]

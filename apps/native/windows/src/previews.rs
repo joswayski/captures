@@ -24,8 +24,12 @@
 //! Minimize grows into "Collapse" while hovered or focused.
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
-//! an accepted drop elsewhere dismisses the card and a drop back on the
-//! stack shakes it (shipping `finishFileDrag`).
+//! its slot keeps the Preferences drag style's imprint (Frosted imprint,
+//! Dock gap or Quiet well, `preview_drag_style::DragOut`). An accepted drop
+//! elsewhere fades the imprint and closes its slot before the card leaves,
+//! and a drop back on the stack shakes it (shipping `finishFileDrag`). A
+//! mostly vertical press instead carries the card up or down the stack to
+//! reorder it (`preview_drag_style::Reorder`).
 //!
 //! Close, Delete, Edit and Clear all show shipping's preview tooltips on the
 //! host's shared `tooltip::Fade`.
@@ -42,7 +46,7 @@
 //! (`preview_chrome::EditorPresence`, polled from `editor::ids`); once the
 //! editor closes the pill shrinks back and the Edit icon lingers for 3 s.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -50,6 +54,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use captures_app::motion::{Animation, Motion, Pose, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
 use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPresence};
+use captures_app::preview_drag_style::{
+    self as drag_style, CardPose, DragEnd, DragOut, DragStyle, PressIntent, Reorder,
+};
 use captures_app::preview_motion::{
     self, DragSway, DustParticle, ExitKind, StackExits, StackFan, StackToolbar, ToolbarCause,
 };
@@ -153,9 +160,6 @@ pub struct Card {
     /// The last action's failure (shipping `.thumbnail-message`), cleared
     /// when the next action starts.
     error: Option<String>,
-    /// A file drag of this card is running (`.thumbnail-file-dragging`): its
-    /// image hides so the drag image never recaptures it.
-    dragging: bool,
     /// Whether an editor shows this capture, and how its Edit control and
     /// ring follow (`.thumbnail-editor-active`, `-leaving`, `-lingering`).
     presence: EditorPresence,
@@ -248,6 +252,56 @@ pub struct Stack {
     /// The "In editor" pill's width, as wide as its wider label
     /// (`preview_chrome::editor_pill_width`).
     pub pill_width: f32,
+    /// Cards whose file is dragged out, or whose drag's end still plays:
+    /// each keeps its slot under its drag style's pose until it finishes.
+    imprints: Vec<Imprint>,
+    /// A card carried up or down the stack to reorder it.
+    carried: Option<Carried>,
+}
+
+/// One card's file drag out of the stack (`DragOut`), from its start until
+/// its end has played.
+struct Imprint {
+    id: String,
+    drag: DragOut,
+    /// The frosted media's Gaussian, made once per drag (again only if the
+    /// surface hands out another device context) and cached by Direct2D
+    /// while its radius holds: the context it belongs to, and the effect
+    /// (`None` where it is missing, as under Wine).
+    blur: FrostCache,
+    /// The radius last set on `blur`, in image pixels.
+    blur_set: Cell<f32>,
+}
+
+type FrostCache = RefCell<Option<(usize, Option<ID2D1Effect>)>>;
+
+impl Imprint {
+    /// Still moving: easing into its style, or playing its end (finished
+    /// ends wait for [`Stack::prune_imprints`]).
+    fn running(&self, now: f64) -> bool {
+        self.drag.ended().is_some() || self.drag.moving(now)
+    }
+}
+
+/// A card carried up or down the stack (`Reorder`) and its last frame.
+struct Carried {
+    id: String,
+    reorder: Reorder,
+    /// Each card's y offset from its slot, by display index.
+    offsets: Vec<f64>,
+    lift: f64,
+}
+
+/// How a file drag that ended (with `outcome`, or `None` for an error or a
+/// drag let go before it began) plays out: only a drop another app accepted
+/// takes the card away; everything else brings it back.
+fn drag_end(outcome: Option<preview::PreviewDragOutcome>) -> DragEnd {
+    match outcome {
+        Some(preview::PreviewDragOutcome::Dismiss) => DragEnd::Dropped,
+        Some(preview::PreviewDragOutcome::Reject | preview::PreviewDragOutcome::Retain) | None => {
+            DragEnd::Returned
+        }
+    }
 }
 
 /// A card's hover look easing toward `on` since `at`, from where each
@@ -412,7 +466,11 @@ impl Fade {
 
 /// Paint `draw` at `opacity`: nothing when invisible, through a layer when
 /// translucent.
-fn faded(dc: &ID2D1DeviceContext, opacity: f32, draw: impl FnOnce() -> Result<()>) -> Result<()> {
+pub(crate) fn faded(
+    dc: &ID2D1DeviceContext,
+    opacity: f32,
+    draw: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     if opacity <= 0. {
         return Ok(());
     }
@@ -559,7 +617,229 @@ impl Stack {
             minimize: Morph::default(),
             just_opened: None,
             pill_width: preview_chrome::EDITOR_PILL_MAX_WIDTH as f32,
+            imprints: Vec::new(),
+            carried: None,
         }
+    }
+
+    // ---- file drags out and reorders ----
+
+    fn imprint(&self, index: usize) -> Option<&Imprint> {
+        let id = &self.cards.get(index)?.entry.id;
+        self.imprints.iter().find(|imprint| &imprint.id == id)
+    }
+
+    /// The dragged card's pose now, or `None` for a card at rest.
+    fn drag_pose(&self, index: usize, now: f64) -> Option<CardPose> {
+        self.imprint(index).map(|imprint| imprint.drag.pose(now))
+    }
+
+    /// The card's file drag began: its slot eases into `style`'s imprint.
+    /// The card takes no hover until its drag has ended and played out.
+    pub fn begin_drag_out(&mut self, id: &str, style: DragStyle, now: f64) {
+        self.imprints.retain(|imprint| imprint.id != id);
+        self.imprints.push(Imprint {
+            id: id.to_owned(),
+            drag: DragOut::new(style, now, self.reduced),
+            blur: RefCell::new(None),
+            blur_set: Cell::new(-1.),
+        });
+        if self
+            .hovered
+            .and_then(|i| self.cards.get(i))
+            .is_some_and(|c| c.entry.id == id)
+        {
+            self.hovered = None;
+        }
+        self.hot = None;
+        self.pressed = None;
+    }
+
+    /// The card's file drag ended: play `end` from the pose it has now.
+    pub fn end_drag_out(&mut self, id: &str, end: DragEnd, now: f64) {
+        if let Some(imprint) = self.imprints.iter_mut().find(|imprint| imprint.id == id) {
+            imprint.drag.end(end, now);
+        }
+    }
+
+    /// Commit the drags whose end has played: a returned card is at rest
+    /// again, and a dropped one leaves the stack with its slot already
+    /// closed, so the frame shrinks without anything moving. `Some(true)`
+    /// when a card left (relayout), `Some(false)` when one came back (hover
+    /// re-arms), `None` otherwise.
+    fn prune_imprints(&mut self, now: f64) -> Option<bool> {
+        let mut finished = None;
+        let mut index = 0;
+        while index < self.imprints.len() {
+            let imprint = &self.imprints[index];
+            let card = self.cards.iter().position(|c| c.entry.id == imprint.id);
+            if card.is_some() && !imprint.drag.finished(now) {
+                index += 1;
+                continue;
+            }
+            let imprint = self.imprints.remove(index);
+            match (card, imprint.drag.ended()) {
+                (Some(card), Some(DragEnd::Dropped)) => {
+                    self.remove(card);
+                    // The window shrinks under a resting pointer.
+                    self.hover_lock.resample_origin();
+                    finished = Some(true);
+                }
+                _ => {
+                    finished.get_or_insert(false);
+                }
+            }
+        }
+        finished
+    }
+
+    /// The display-index offset of a card older than closing slots: each
+    /// slot a dragged card is giving up pulls it toward the anchored edge.
+    fn closing_shift(&self, index: usize, now: f64) -> f64 {
+        self.imprints
+            .iter()
+            .filter_map(|imprint| {
+                let dragged = self.cards.iter().position(|c| c.entry.id == imprint.id)?;
+                (index < dragged)
+                    .then(|| drag_style::closing_shift(imprint.drag.pose(now).slot, self.top))
+            })
+            .sum()
+    }
+
+    /// Whether a press can reorder: an expanded, settled stack of two or
+    /// more cards with nothing leaving or being dragged out.
+    fn can_reorder(&self) -> bool {
+        !self.collapsed()
+            && self.progress() <= 0.
+            && self.exits.is_empty()
+            && self.imprints.is_empty()
+            && self.carried.is_none()
+            && self.stack.ids().len() >= 2
+            && self.cards.len() == self.stack.ids().len()
+    }
+
+    /// Pick up display `index` to carry it up or down the stack. Its hover
+    /// controls ease away as it lifts, and no card or control takes the
+    /// pointer or lights until it has landed.
+    pub fn begin_reorder(&mut self, index: usize, now: f64) {
+        let Some(card) = self.cards.get(index) else {
+            return;
+        };
+        let reorder = Reorder::new(self.cards.len(), index, self.top, now, self.reduced);
+        self.carried = Some(Carried {
+            id: card.entry.id.clone(),
+            reorder,
+            offsets: vec![0.; self.cards.len()],
+            lift: 0.,
+        });
+        self.hovered = None;
+        self.hot = None;
+        self.pressed = None;
+    }
+
+    /// The pointer moved `dy` DIPs since the press that picked the card up.
+    pub fn reorder_pointer(&mut self, dy: f64) {
+        if let Some(carried) = self.carried.as_mut() {
+            carried.reorder.pointer(dy);
+        }
+    }
+
+    /// Let go: the carried card glides into its new slot.
+    pub fn reorder_drop(&mut self, now: f64) {
+        if let Some(carried) = self.carried.as_mut() {
+            carried.reorder.drop(now);
+        }
+    }
+
+    /// Give the carry up: every card glides home.
+    pub fn reorder_cancel(&mut self, now: f64) {
+        if let Some(carried) = self.carried.as_mut() {
+            carried.reorder.cancel(now);
+        }
+    }
+
+    /// Whether the pointer at `(x, y)` (window DIPs) has left the carried
+    /// card's column, or gone past the stack's outermost slot, far enough
+    /// to turn the carry into a file drag.
+    fn reorder_escapes(&self, x: f32, y: f32) -> bool {
+        if self.carried.is_none() {
+            return false;
+        }
+        let count = self.cards.len();
+        let dx = (PAD - x).max(x - (PAD + CARD_W)).max(0.);
+        let tops = [0, count.saturating_sub(1)].map(|i| Reorder::slot_top(count, i, self.top));
+        let offset = f64::from(self.offset());
+        let first = tops[0].min(tops[1]) + offset;
+        let last = tops[0].max(tops[1]) + offset + f64::from(CARD_H);
+        let y = f64::from(y);
+        drag_style::reorder_escapes(f64::from(dx), (first - y).max(y - last))
+    }
+
+    /// Advance the carry one frame; true when it landed and the stack's
+    /// order changed (or stayed) for good.
+    fn reorder_frame(&mut self, now: f64) -> bool {
+        let Some(carried) = self.carried.as_mut() else {
+            return false;
+        };
+        let (offsets, lift) = carried.reorder.frame(now);
+        carried.offsets = offsets;
+        carried.lift = lift;
+        if !carried.reorder.settled(now) {
+            return false;
+        }
+        let Some(carried) = self.carried.take() else {
+            return false;
+        };
+        let (from, to) = (carried.reorder.from(), carried.reorder.to());
+        if self.stack.move_card(&carried.id, to) && from < self.cards.len() {
+            let card = self.cards.remove(from);
+            self.cards.insert(to.min(self.cards.len()), card);
+            // The display order follows the new membership.
+            if self.exits.is_empty() {
+                self.exits = StackExits::default();
+                self.exits.sync(self.stack.ids());
+            }
+            // Focus on a card's button follows its card.
+            let moved = |i: usize| {
+                if i == from {
+                    to
+                } else if from < to && i > from && i <= to {
+                    i - 1
+                } else if to < from && i >= to && i < from {
+                    i + 1
+                } else {
+                    i
+                }
+            };
+            self.focus = self.focus.map(|hit| match hit {
+                Hit::Close(i) => Hit::Close(moved(i)),
+                Hit::Delete(i) => Hit::Delete(moved(i)),
+                Hit::Edit(i) => Hit::Edit(moved(i)),
+                Hit::Copy(i) => Hit::Copy(moved(i)),
+                Hit::Save(i) => Hit::Save(moved(i)),
+                Hit::Card(i) => Hit::Card(moved(i)),
+                other => other,
+            });
+        }
+        // The pointer finds its card again; hover re-arms there.
+        self.hovered = None;
+        self.hot = None;
+        self.pressed = None;
+        true
+    }
+
+    /// The display index of the carried card.
+    fn carried_index(&self) -> Option<usize> {
+        let carried = self.carried.as_ref()?;
+        self.cards.iter().position(|c| c.entry.id == carried.id)
+    }
+
+    /// A card's y offset from its slot while a carry runs.
+    fn reorder_offset(&self, index: usize) -> f64 {
+        self.carried
+            .as_ref()
+            .and_then(|carried| carried.offsets.get(index).copied())
+            .unwrap_or(0.)
     }
 
     /// Size the "In editor" pill to its labels in this host's type.
@@ -962,7 +1242,10 @@ impl Stack {
                     EditorPhase::Present | EditorPhase::Leaving
                 ) && card.presence.phase_elapsed_ms(now) < preview_chrome::EDITOR_PRESENCE_LEAVE_MS
             });
+        let dragging =
+            self.carried.is_some() || self.imprints.iter().any(|imprint| imprint.running(now));
         pile || arriving
+            || dragging
             || presence
             || self.toolbar_moving()
             || (!self.instant() && self.minimize.running(now))
@@ -1119,6 +1402,10 @@ impl Stack {
         };
         // Older cards settle under the pointer that pressed Close or Delete.
         self.hover_lock.lock();
+        // A carry in progress glides home instead of reordering around it,
+        // and a card leaving now takes its imprint with it.
+        self.reorder_cancel(now_ms());
+        self.imprints.retain(|imprint| imprint.id != id);
         let progress = self.progress();
         let playing = !self.reduced
             && self.card_motion.is_some()
@@ -1225,6 +1512,19 @@ impl Stack {
             self.cards.retain(|card| display.contains(&card.entry.id));
             self.dust.clear();
         }
+        // Nor closing slots: a dropped card still playing its end goes now.
+        let dropped: Vec<String> = self
+            .imprints
+            .iter()
+            .filter(|imprint| imprint.drag.ended() == Some(DragEnd::Dropped))
+            .map(|imprint| imprint.id.clone())
+            .collect();
+        for id in dropped {
+            if let Some(index) = self.cards.iter().position(|c| c.entry.id == id) {
+                self.remove(index);
+            }
+        }
+        self.carried = None;
         let from = self.progress();
         self.stack.set_collapsed(collapsed);
         self.fly = (from, now_ms());
@@ -1290,7 +1590,6 @@ impl Stack {
             busy: false,
             saved: false,
             error: None,
-            dragging: false,
             presence: EditorPresence::default(),
         });
         self.exits.sync(self.stack.ids());
@@ -1310,6 +1609,9 @@ impl Stack {
             self.dust.remove(id);
             self.exits.release(id, false);
             self.exits.sync(self.stack.ids());
+            self.imprints.retain(|imprint| &imprint.id != id);
+            // Display indices moved under a carry.
+            self.carried = None;
         }
         self.sync_toolbar(ToolbarCause::Other);
         self.hovered = None;
@@ -1340,18 +1642,23 @@ impl Stack {
     }
 
     /// Display `index`'s slot, slid toward the anchor while it settles into
-    /// an exiting card's hole.
+    /// an exiting card's hole or a dragged card's closing slot, and moved
+    /// by a carry.
     fn card_rect(&self, index: usize) -> Option<Rect> {
         let id = &self.cards.get(index)?.entry.id;
         let layout =
             preview::card_layout_in(self.cards.len(), index, self.collapsed(), self.top, false)?;
-        let shift = self.exits.shift_px(
+        let now = now_ms();
+        let mut shift = self.exits.shift_px(
             id,
-            now_ms(),
+            now,
             self.reduced,
             &preview_motion::settle_tween(),
             self.top,
         );
+        if !self.collapsed() {
+            shift += self.closing_shift(index, now) + self.reorder_offset(index);
+        }
         let y = (layout.y + shift) as f32 + self.offset();
         Some(rect(PAD, y, PAD + CARD_W, y + CARD_H))
     }
@@ -1461,14 +1768,17 @@ impl Stack {
     /// polled `set_thumbnail_ignore_cursor_events`.
     pub fn solid(&self, x: f32, y: f32) -> bool {
         let progress = self.progress();
-        (progress > 0. && progress < 1.) || self.pressed.is_some() || self.hit(x, y).is_some()
+        (progress > 0. && progress < 1.)
+            || self.pressed.is_some()
+            || self.carried.is_some()
+            || self.hit(x, y).is_some()
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let inside = |r: &Rect| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-        // Nothing takes the pointer mid-fly.
+        // Nothing takes the pointer mid-fly or while a card is carried.
         let progress = self.progress();
-        if progress > 0. && progress < 1. {
+        if (progress > 0. && progress < 1.) || self.carried.is_some() {
             return None;
         }
         if self.collapsed() {
@@ -1490,8 +1800,8 @@ impl Stack {
                 continue;
             };
             // A leaving card no longer takes the pointer (shipping's
-            // `pointer-events: none`).
-            if !inside(&card) || self.exiting(index) {
+            // `pointer-events: none`), nor does a dragged card's imprint.
+            if !inside(&card) || self.exiting(index) || self.imprint(index).is_some() {
                 continue;
             }
             // Controls are only targets while the card shows them.
@@ -1517,6 +1827,11 @@ impl Stack {
     /// Pointer at `(x, y)` DIPs, or `None` when it left; true when the look
     /// changed.
     pub fn pointer(&mut self, at: Option<(f32, f32)>) -> bool {
+        // A carried card keeps its hover look until it lands; nothing else
+        // lights under it.
+        if self.carried.is_some() {
+            return false;
+        }
         let locked = self
             .hover_lock
             .pointer(at.map(|(x, y)| (f64::from(x), f64::from(y))));
@@ -1546,6 +1861,7 @@ impl Stack {
             .and_then(|(x, y)| {
                 (0..self.cards.len()).find(|&i| {
                     !self.exiting(i)
+                        && self.imprint(i).is_none()
                         && self.card_rect(i).is_some_and(|r| {
                             x >= r.left && x < r.right && y >= r.top && y < r.bottom
                         })
@@ -1626,8 +1942,15 @@ impl Stack {
             return items;
         }
         for (index, card) in self.cards.iter().enumerate() {
-            // A leaving card has left shipping's tree.
-            let Some(r) = self.card_rect(index).filter(|_| !self.exiting(index)) else {
+            // A leaving card has left shipping's tree, as has one another app
+            // accepted while its slot closes.
+            let dropped = self
+                .imprint(index)
+                .is_some_and(|imprint| imprint.drag.ended() == Some(DragEnd::Dropped));
+            let Some(r) = self
+                .card_rect(index)
+                .filter(|_| !self.exiting(index) && !dropped)
+            else {
                 continue;
             };
             let group = Self::uia_key(Hit::Card(index));
@@ -1715,7 +2038,12 @@ impl Stack {
             self.paint_sparkles(dc, t)?;
             return self.paint_focus(dc, t);
         }
-        for index in 0..self.cards.len() {
+        // A carried card rides above the others.
+        let carried = self.carried_index();
+        for index in (0..self.cards.len())
+            .filter(|&i| Some(i) != carried)
+            .chain(carried)
+        {
             if let Some(card) = self.card_rect(index) {
                 self.paint_listed(dc, g, t, index, card)?;
             }
@@ -2174,6 +2502,18 @@ impl Stack {
             let x = [1, 2, 3, 4].map(|n| t.n(&format!("thumbnail-drop-reject-x-{n}")));
             dx += f64::from(reject_offset(x, now - start));
         }
+        // A file drag's imprint: the whole card fades and scales.
+        let pose = self.drag_pose(index, now);
+        if let Some(pose) = pose {
+            opacity *= pose.opacity;
+            scale *= pose.scale;
+        }
+        // A carried card grows as it lifts, over a deeper shadow.
+        let lift = match &self.carried {
+            Some(carried) if carried.id == *id => carried.lift,
+            _ => 0.,
+        };
+        scale *= 1. + (drag_style::REORDER_LIFT_SCALE - 1.) * lift;
         let mut base = Matrix3x2::identity();
         unsafe { dc.GetTransform(&mut base) };
         // Scale about the card's centre, then move it.
@@ -2189,6 +2529,17 @@ impl Stack {
         } * base;
         unsafe { dc.SetTransform(&posed) };
         let result = faded(dc, opacity as f32, || {
+            if lift > 0. {
+                let radius = t.n("thumbnail-card-radius");
+                let deep = Shadow {
+                    x: 0.,
+                    y: 12.,
+                    blur: 24.,
+                    spread: 0.,
+                    color: [0., 0., 0., 0.35 * lift as f32],
+                };
+                outside(dc, (r, radius), || gfx::shadow(dc, r, radius, &[deep]))?;
+            }
             blurred(dc, blur, |dc| self.paint_card(dc, g, t, index, r, fade))
         });
         unsafe { dc.SetTransform(&base) };
@@ -2299,6 +2650,19 @@ impl Stack {
         fade: Fade,
     ) -> Result<()> {
         let card = &self.cards[index];
+        // The pile has no imprints.
+        let pose = self
+            .drag_pose(index, now_ms())
+            .filter(|_| !self.collapsed())
+            .unwrap_or(CardPose::REST);
+        // A file drag's imprint fades the chrome (shadow, rings, chips and
+        // controls) and the glass fill, and softens the media.
+        let chrome = pose.chrome_opacity as f32;
+        let fade = Fade {
+            frame: fade.frame * chrome,
+            source: fade.source,
+            chrome: fade.chrome * chrome,
+        };
         // A leaving card keeps the dimmed hover look it had when it went; a
         // dissolving one also keeps its controls while they fade.
         // A shaking card shows its image undimmed (`.thumbnail-drop-rejected img`).
@@ -2332,10 +2696,12 @@ impl Stack {
             controls = 1.;
         }
         let radius = t.n("thumbnail-card-radius");
-        // `--thumbnail-card-shadow` and the 1 px white ring.
+        let (fill, media_opacity) = (pose.fill_opacity as f32, pose.media_opacity as f32);
+        // `--thumbnail-card-shadow` and the 1 px white ring. Under a
+        // translucent imprint the shadow only shows around the card.
         faded(dc, fade.frame, || {
             let shadow = || gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"));
-            if card.dragging {
+            if fill < 1. || media_opacity < 1. {
                 outside(dc, (r, radius), shadow)
             } else {
                 shadow()
@@ -2347,15 +2713,22 @@ impl Stack {
             b: 1.,
             a,
         };
+        let imprint = self.imprint(index);
         faded(dc, fade.source, || {
-            // A dragged card's media hides and leaves it hollow
-            // (`.thumbnail-file-dragging`; macOS clears its background).
-            if card.dragging {
+            if fill > 0. {
+                gfx::fill_round(dc, r, radius, t.color_alpha("glass-strong-solid", fill))?;
+            }
+            if media_opacity <= 0. {
                 return Ok(());
             }
-            gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
             if let Some(image) = &card.image {
-                cover(dc, image, (r, radius), (filter, zoom), streak)?;
+                let media = Media {
+                    blur: pose.media_blur as f32,
+                    opacity: media_opacity,
+                    scale: pose.media_scale as f32,
+                    cached: imprint.map(|imprint| (&imprint.blur, &imprint.blur_set)),
+                };
+                cover(dc, image, (r, radius), (filter, zoom), streak, media)?;
             }
             if filter > 0. {
                 // `brightness(.5)` on the opaque image.
@@ -2367,12 +2740,15 @@ impl Stack {
                         r: 0.,
                         g: 0.,
                         b: 0.,
-                        a: (1. - preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32) * filter,
+                        a: (1. - preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32)
+                            * filter
+                            * media_opacity,
                     },
                 )?;
             }
             Ok(())
         })?;
+        paint_well(dc, t, (r, radius), pose)?;
         faded(dc, fade.frame, || {
             gfx::ring(dc, r, radius, 0., 1., white(0.08))?;
             self.paint_editor_ring(dc, t, index, (r, radius))?;
@@ -2381,7 +2757,8 @@ impl Stack {
         faded(dc, fade.chrome, || {
             self.paint_chrome(dc, g, t, index, r, (1. - meta, controls))?;
             paint_message(dc, g, t, card.error.as_deref(), r)
-        })
+        })?;
+        paint_glyph(dc, g, t, r, pose, 1.)
     }
 
     /// `.thumbnail-capture-highlight::after`: a 1 px ring of 85 % accent and
@@ -2811,7 +3188,7 @@ fn glow(dc: &ID2D1DeviceContext, t: &Tokens, card: Rect, amount: f32) -> Result<
 /// 1200×900 one, both showing `image`; `hovered` hovers the first.
 pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack {
     use captures_settings::MiniPreviewPlacement as P;
-    let placement = if select == Some("pile-top") {
+    let placement = if matches!(select, Some("pile-top" | "drag-close-top")) {
         P::TopLeft
     } else {
         P::BottomLeft
@@ -2822,11 +3199,12 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
         Some("pile" | "pile-hover" | "pile-top" | "pile-sparkle")
     );
     let overflow = select == Some("overflow");
+    let three = matches!(select, Some("drag-close-top" | "reorder"));
     let mut cards = vec![
         ("first", (1600, 1000, 842_000), true),
         ("second", (1200, 900, 432_000), false),
     ];
-    if pile || overflow {
+    if pile || overflow || three {
         cards.insert(0, ("zeroth", (1920, 1080, 1_204_000), false));
     }
     if overflow {
@@ -2957,11 +3335,37 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.stack.set_collapsed(true);
             stack.focus = Some(Hit::Expand);
         }
-        // The hovered card's file is being dragged out: its image hides.
-        Some("file-drag") => {
-            stack.pointer(Some((150., 90.)));
-            let hovered = stack.hovered.expect("a hovered card");
-            stack.cards[hovered].dragging = true;
+        // The newest card's file is out of the stack in each drag style:
+        // the full frosted imprint, the dock fading out as its gap starts
+        // to close (the older card sliding down) and the quiet well. The
+        // frame paints about 100 ms after the fixture is built.
+        Some(select @ ("file-drag" | "file-drag-dock" | "file-drag-well")) => {
+            let (style, ago) = match select {
+                "file-drag-dock" => (DragStyle::Dock, 200.),
+                "file-drag-well" => (DragStyle::Well, 1_000.),
+                _ => (DragStyle::Frosted, 1_000.),
+            };
+            let newest = stack.cards[last].entry.id.clone();
+            stack.begin_drag_out(&newest, style, now_ms() - ago);
+        }
+        // A top-left stack whose middle card another app accepted, its
+        // slot half closed: the older card below rises toward the top.
+        Some("drag-close-top") => {
+            let middle = stack.cards[1].entry.id.clone();
+            let now = now_ms();
+            stack.begin_drag_out(&middle, DragStyle::Frosted, now - 2_000.);
+            stack.end_drag_out(&middle, DragEnd::Dropped, now - 230.);
+        }
+        // The oldest card carried 1.4 slots down a three-card stack: lifted
+        // and above the card it passed, which has glided up.
+        Some("reorder") => {
+            let start = now_ms() - 600.;
+            stack.begin_reorder(0, start);
+            stack.reorder_pointer(1.4 * drag_style::SLOT_PITCH);
+            for frame in 1..=37 {
+                stack.reorder_frame(start + f64::from(frame) * 16.);
+            }
+            stack.reorder_frame(now_ms());
         }
         Some("pile" | "pile-top") | None => {}
         Some(_) => {
@@ -3142,6 +3546,7 @@ fn cover(
     (r, radius): (Rect, f32),
     (filter, zoom): (f32, f32),
     (stretch, streak): (f32, f32),
+    media: Media,
 ) -> Result<()> {
     let size = unsafe { image.GetSize() };
     if size.width <= 0. || size.height <= 0. {
@@ -3149,8 +3554,85 @@ fn cover(
     }
     let (w, h) = (r.right - r.left, r.bottom - r.top);
     let mut k = (w / size.width).max(h / size.height);
-    k *= 1. + (preview_chrome::HOVER_MEDIA_SCALE as f32 - 1.) * zoom;
+    k *= (1. + (preview_chrome::HOVER_MEDIA_SCALE as f32 - 1.) * zoom) * media.scale;
     let kx = k * stretch;
+    // A file drag's frost: one Gaussian per drag, its radius set only when
+    // it changes, so Direct2D keeps the blurred image between frames.
+    let frost = (media.blur > 0.05 && streak <= 0.)
+        .then_some(media.cached)
+        .flatten()
+        .and_then(|(cell, set)| {
+            let context = dc.as_raw() as usize;
+            let mut cache = cell.borrow_mut();
+            if cache.as_ref().is_none_or(|(owner, _)| *owner != context) {
+                let effect = unsafe {
+                    dc.CreateEffect(&CLSID_D2D1GaussianBlur)
+                        .ok()
+                        .inspect(|effect| {
+                            effect.SetInput(0, image, true);
+                            let _ = effect.SetValue(
+                                D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
+                                D2D1_PROPERTY_TYPE_ENUM,
+                                &(D2D1_BORDER_MODE_HARD.0 as u32).to_le_bytes(),
+                            );
+                            let _ = effect.SetValue(
+                                D2D1_PROPERTY_CACHED.0 as u32,
+                                D2D1_PROPERTY_TYPE_BOOL,
+                                &1u32.to_le_bytes(),
+                            );
+                        })
+                };
+                *cache = Some((context, effect));
+                set.set(-1.);
+            }
+            Some((cache.as_ref()?.1.clone()?, set))
+        });
+    if let Some((effect, set)) = frost {
+        // Image pixels: the brush scales the effect's output; the hover
+        // blur, easing out, adds to the frost.
+        let deviation = (media.blur + preview_chrome::HOVER_MEDIA_BLUR as f32 * filter) / k;
+        let deviation = (deviation * 4.).round() / 4.;
+        unsafe {
+            if set.get() != deviation {
+                effect.SetValue(
+                    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &deviation.to_le_bytes(),
+                )?;
+                set.set(deviation);
+            }
+            let placed = Matrix3x2 {
+                M11: k,
+                M12: 0.,
+                M21: 0.,
+                M22: k,
+                M31: r.left + (w - size.width * k) / 2.,
+                M32: r.top + (h - size.height * k) / 2.,
+            };
+            let brush = dc.CreateImageBrush(
+                &effect.cast::<ID2D1Image>()?,
+                &D2D1_IMAGE_BRUSH_PROPERTIES {
+                    sourceRectangle: rect(0., 0., size.width, size.height),
+                    extendModeX: D2D1_EXTEND_MODE_CLAMP,
+                    extendModeY: D2D1_EXTEND_MODE_CLAMP,
+                    interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+                },
+                Some(&D2D1_BRUSH_PROPERTIES {
+                    opacity: media.opacity,
+                    transform: placed,
+                }),
+            )?;
+            dc.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: r,
+                    radiusX: radius,
+                    radiusY: radius,
+                },
+                &brush,
+            );
+        }
+        return Ok(());
+    }
     let hovered = filter > 0. || streak > 0.;
     let placed = Matrix3x2 {
         M11: kx,
@@ -3224,9 +3706,117 @@ fn cover(
                 brush.cast()?
             }
         };
+        brush.SetOpacity(media.opacity);
         dc.FillRoundedRectangle(&shape, &brush);
     }
     Ok(())
+}
+
+/// How a card's media draws under a file drag's pose: its frost radius in DIPs (with the drag's cached effect),
+/// opacity and scale about its centre.
+#[derive(Clone, Copy)]
+struct Media<'a> {
+    blur: f32,
+    opacity: f32,
+    scale: f32,
+    cached: Option<(&'a FrostCache, &'a Cell<f32>)>,
+}
+
+/// The imprint's recess and edge: the well's `--glass-veil` fill with its
+/// inner shadow, then the 1 DIP hairline inside the edge.
+pub(crate) fn paint_well(
+    dc: &ID2D1DeviceContext,
+    t: &Tokens,
+    (r, radius): (Rect, f32),
+    pose: CardPose,
+) -> Result<()> {
+    let well = pose.well as f32;
+    if well > 0. {
+        let veil = |a: f32| D2D1_COLOR_F {
+            r: 10. / 255.,
+            g: 10. / 255.,
+            b: 14. / 255.,
+            a,
+        };
+        gfx::fill_round(
+            dc,
+            r,
+            radius,
+            veil(drag_style::WELL_FILL_OPACITY as f32 * well),
+        )?;
+        // `inset 0 0 3px`: bands inside the edge fading inward.
+        let blur = drag_style::WELL_INNER_SHADOW_BLUR as f32;
+        let steps = blur.ceil().max(1.) as usize;
+        let total = drag_style::WELL_INNER_SHADOW_OPACITY as f32 * well;
+        for step in 0..steps {
+            let falloff = 1. - step as f32 / steps as f32;
+            let alpha = total * falloff * 2. / (steps as f32 + 1.);
+            let band = blur / steps as f32;
+            let from = -band * (step as f32 + 1.);
+            gfx::ring(
+                dc,
+                r,
+                radius,
+                from,
+                from + band,
+                D2D1_COLOR_F {
+                    r: 0.,
+                    g: 0.,
+                    b: 0.,
+                    a: alpha,
+                },
+            )?;
+        }
+    }
+    let hairline = pose.hairline as f32;
+    if hairline > 0. {
+        let width = drag_style::HAIRLINE_WIDTH as f32;
+        let color = t.color_alpha("glass-text", drag_style::HAIRLINE_OPACITY as f32 * hairline);
+        gfx::ring(dc, r, radius, -width, 0., color)?;
+    }
+    Ok(())
+}
+
+/// The well's "out" glyph: a faint white disc with the arrow stroked in
+/// `--glass-text`, centred and scaled by the pose and `size` (1 on a card;
+/// Preferences' demo cards draw it smaller).
+pub(crate) fn paint_glyph(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    t: &Tokens,
+    r: Rect,
+    pose: CardPose,
+    size: f32,
+) -> Result<()> {
+    let glyph = pose.glyph as f32;
+    if glyph <= 0. {
+        return Ok(());
+    }
+    let s = pose.glyph_scale as f32 * size;
+    let (cx, cy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+    let d = drag_style::GLYPH_DIAMETER as f32 * s / 2.;
+    gfx::fill_round(
+        dc,
+        rect(cx - d, cy - d, cx + d, cy + d),
+        d,
+        D2D1_COLOR_F {
+            r: 1.,
+            g: 1.,
+            b: 1.,
+            a: drag_style::GLYPH_DISC_OPACITY as f32 * glyph,
+        },
+    )?;
+    let side = drag_style::GLYPH_SIZE as f32 * s;
+    let scale = side / 24.;
+    gfx::path(
+        dc,
+        &g.factory,
+        drag_style::GLYPH_PATH,
+        false,
+        (cx - side / 2., cy - side / 2., scale),
+        drag_style::GLYPH_STROKE as f32 * scale,
+        t.color_alpha("glass-text", drag_style::GLYPH_OPACITY as f32 * glyph),
+    )
 }
 
 /// Columns of the square-ish chip atlas.
@@ -3414,9 +4004,13 @@ struct Previews {
     /// A press on the pile: where in the window (DIPs) and on the screen
     /// (px), and whether it moved far enough to carry instead of expand.
     carry: Option<Carry>,
-    /// A press on an expanded card's image: its id and where on the screen
-    /// (px), until it moves far enough to drag the file or lets go.
-    drag_press: Option<(String, POINT)>,
+    /// A press on an expanded card's image: its id, display index and where
+    /// on the screen (px), until it moves far enough to reorder the card or
+    /// drag its file, or lets go.
+    drag_press: Option<(String, usize, POINT)>,
+    /// The card being carried to reorder it, and where the press was on the
+    /// screen (px).
+    reorder_press: Option<(String, POINT)>,
     /// The card whose file drag is preparing or running.
     dragging: Option<String>,
     /// The prepared file, waiting for the drag loop outside the borrow.
@@ -3667,6 +4261,7 @@ impl Previews {
             dragged: None,
             carry: None,
             drag_press: None,
+            reorder_press: None,
             dragging: None,
             drag_ready: None,
         })
@@ -4147,6 +4742,22 @@ impl Previews {
             let _ = self.relayout();
             self.stack.pointer(self.cursor());
         }
+        let now = now_ms();
+        // A landed carry commits the new order; hover re-arms where the
+        // pointer is.
+        if self.stack.reorder_frame(now) {
+            self.rearm();
+        }
+        // A file drag's end has played: a dropped card leaves with its slot
+        // already closed, so the window shrinks without anything moving.
+        match self.stack.prune_imprints(now) {
+            Some(true) => {
+                let _ = self.relayout();
+                self.rearm();
+            }
+            Some(false) => self.rearm(),
+            None => {}
+        }
         self.stack.prune_rejects();
         let _ = self.render();
         if self.moving() {
@@ -4216,21 +4827,35 @@ impl Previews {
         self.animate();
     }
 
-    /// The press on a card's image moved past the drag threshold: hide the
-    /// image and export the file off the UI thread (shipping
-    /// `beginFileDrag`).
+    /// Hover and click-through follow the pointer again.
+    fn rearm(&mut self) {
+        let at = self.cursor();
+        self.stack.pointer(at);
+        self.set_passthrough(!at.is_some_and(|(x, y)| self.stack.solid(x, y)));
+    }
+
+    /// The press on a card's image moved past the drag threshold: its slot
+    /// eases into the Preferences drag style's imprint and the file exports
+    /// off the UI thread (shipping `beginFileDrag`). The style is read now,
+    /// so a change in Preferences applies to the next drag.
     fn begin_drag(&mut self, id: String) {
         self.drag_press = None;
+        self.reorder_press = None;
         self.stack.pressed = None;
         // The OLE drag loop takes the mouse itself.
         let _ = unsafe { ReleaseCapture() };
         let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id) else {
             return;
         };
-        card.dragging = true;
         card.error = None;
         self.dragging = Some(id.clone());
+        let style = captures_settings::load(&self.options.settings_file)
+            .unwrap_or_default()
+            .mini_preview_drag_style;
+        self.stack.reduced = crate::appearance::reduced_motion();
+        self.stack.begin_drag_out(&id, style, now_ms());
         let _ = self.render();
+        self.animate();
         let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
         std::thread::spawn(move || {
             let _ = sender.send(Done::DragReady(
@@ -4242,38 +4867,37 @@ impl Previews {
     }
 
     /// The file drag ended (`Some(Ok)`), failed (`Some(Err)`) or was let
-    /// go before it began (`None`). An accepted drop outside Captures
-    /// dismisses the card, a drop back on this stack shakes it, and any
-    /// other end keeps it (shipping `finishFileDrag`). Hover and
-    /// click-through re-arm either way.
+    /// go before it began (`None`). A drop another app accepted fades the
+    /// imprint and closes its slot, then the card leaves (`motion_tick`);
+    /// any other end brings the card back, and a drop back on this stack
+    /// also shakes it (shipping `finishFileDrag`). Click-through re-arms
+    /// now; hover once the card is back at rest.
     fn end_drag(&mut self, result: Option<std::result::Result<crate::drag::Outcome, String>>) {
         let Some(id) = self.dragging.take() else {
             return;
         };
         self.drag_ready = None;
-        if let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id) {
-            card.dragging = false;
-            if let Some(Err(error)) = &result {
-                card.error = Some(error.clone());
-            }
+        if let (Some(card), Some(Err(error))) = (
+            self.stack.cards.iter_mut().find(|c| c.entry.id == id),
+            &result,
+        ) {
+            card.error = Some(error.clone());
         }
+        self.stack.reduced = crate::appearance::reduced_motion();
         // A card already leaving keeps its exit.
         let live = self.stack.stack.ids().contains(&id);
-        if let Some(Ok(outcome)) = result.filter(|_| live) {
-            self.stack.reduced = crate::appearance::reduced_motion();
-            let landing = crate::drag::landing(outcome.point, Some(self.hwnd));
-            match preview::preview_drag_outcome(outcome.accepted, landing) {
-                preview::PreviewDragOutcome::Dismiss => {
-                    self.stack.leave(&id, ExitKind::Dismiss, 0., true);
-                    let _ = self.relayout();
-                }
-                preview::PreviewDragOutcome::Reject => self.stack.reject(&id),
-                preview::PreviewDragOutcome::Retain => {}
+        let outcome = match result {
+            Some(Ok(outcome)) if live => {
+                let landing = crate::drag::landing(outcome.point, Some(self.hwnd));
+                Some(preview::preview_drag_outcome(outcome.accepted, landing))
             }
+            _ => None,
+        };
+        if outcome == Some(preview::PreviewDragOutcome::Reject) {
+            self.stack.reject(&id);
         }
-        let at = self.cursor();
-        self.stack.pointer(at);
-        self.set_passthrough(!at.is_some_and(|(x, y)| self.stack.solid(x, y)));
+        self.stack.end_drag_out(&id, drag_end(outcome), now_ms());
+        self.rearm();
         let _ = self.render();
         self.animate();
     }
@@ -4302,14 +4926,51 @@ impl Previews {
                     };
                     self.tracking = unsafe { TrackMouseEvent(&mut track) }.is_ok();
                 }
-                if let Some((id, press)) = self.drag_press.clone() {
-                    let mut now = POINT::default();
-                    unsafe {
-                        let _ = GetCursorPos(&mut now);
-                    }
-                    if crate::drag::beyond_threshold(press, now) {
+                let mut cursor = POINT::default();
+                unsafe {
+                    let _ = GetCursorPos(&mut cursor);
+                }
+                let since = |press: POINT, scale: f32| {
+                    (
+                        f64::from(cursor.x - press.x) / f64::from(scale),
+                        f64::from(cursor.y - press.y) / f64::from(scale),
+                    )
+                };
+                // A carried card follows the pointer up and down; leaving
+                // its column hands the gesture to the file drag.
+                if let Some((id, press)) = self.reorder_press.clone() {
+                    let (x, y) = point(lp, self.scale);
+                    if self.stack.reorder_escapes(x, y) {
+                        self.stack.reorder_cancel(now_ms());
                         self.begin_drag(id);
-                        return Some(LRESULT(0));
+                    } else {
+                        self.stack.reorder_pointer(since(press, self.scale).1);
+                        let _ = self.render();
+                        self.animate();
+                    }
+                    return Some(LRESULT(0));
+                }
+                // A mostly vertical press reorders; otherwise past the system
+                // drag threshold it drags the file.
+                if let Some((id, index, press)) = self.drag_press.clone() {
+                    let (dx, dy) = since(press, self.scale);
+                    let count = self.stack.stack.ids().len();
+                    match drag_style::press_intent(dx, dy, count) {
+                        Some(PressIntent::Reorder) if self.stack.can_reorder() => {
+                            self.drag_press = None;
+                            self.stack.reduced = crate::appearance::reduced_motion();
+                            self.stack.begin_reorder(index, now_ms());
+                            self.stack.reorder_pointer(dy);
+                            self.reorder_press = Some((id, press));
+                            let _ = self.render();
+                            self.animate();
+                            return Some(LRESULT(0));
+                        }
+                        Some(_) if crate::drag::beyond_threshold(press, cursor) => {
+                            self.begin_drag(id);
+                            return Some(LRESULT(0));
+                        }
+                        _ => {}
                     }
                 }
                 if self.carry.is_some() {
@@ -4342,6 +5003,11 @@ impl Previews {
             // it is).
             WM_CAPTURECHANGED => {
                 self.drag_press = None;
+                // A carry cut short glides home.
+                if self.reorder_press.take().is_some() {
+                    self.stack.reorder_cancel(now_ms());
+                    self.animate();
+                }
                 if self.carry_end() {
                     self.stack.pressed = None;
                     let _ = self.render();
@@ -4389,7 +5055,7 @@ impl Previews {
                     && !card.busy
                     && self.dragging.is_none()
                 {
-                    self.drag_press = Some((card.entry.id.clone(), screen));
+                    self.drag_press = Some((card.entry.id.clone(), index, screen));
                 }
                 if self.stack.pressed == Some(Hit::Expand) {
                     self.carry = Some(Carry {
@@ -4405,6 +5071,16 @@ impl Previews {
             WM_LBUTTONUP => {
                 let (x, y) = point(lp, self.scale);
                 self.drag_press = None;
+                // Letting a carried card go glides it into its new slot; the
+                // order commits once it lands (`motion_tick`).
+                if self.reorder_press.take().is_some() {
+                    self.stack.reorder_drop(now_ms());
+                    let _ = unsafe { ReleaseCapture() };
+                    self.stack.pressed = None;
+                    let _ = self.render();
+                    self.animate();
+                    return Some(LRESULT(0));
+                }
                 // Clear the carry before releasing capture, whose
                 // WM_CAPTURECHANGED would otherwise end it too.
                 let carried = self.carry_end();
@@ -4577,7 +5253,6 @@ mod tests {
                 busy: false,
                 saved: false,
                 error: None,
-                dragging: false,
                 presence: EditorPresence::default(),
             });
         }
@@ -5218,6 +5893,152 @@ mod tests {
         assert!(s.pointer(Some((100., 100.))));
         assert_eq!(s.hit(290., 70.), Some(Hit::Delete(1)));
         assert_eq!(s.hit(45., 70.), Some(Hit::Edit(1)));
+    }
+
+    #[test]
+    fn only_an_accepted_drop_takes_the_dragged_card_away() {
+        use preview::PreviewDragOutcome as O;
+        assert_eq!(drag_end(Some(O::Dismiss)), DragEnd::Dropped);
+        // Refused, kept, failed or let go before it began: it comes back.
+        for outcome in [Some(O::Reject), Some(O::Retain), None] {
+            assert_eq!(drag_end(outcome), DragEnd::Returned, "{outcome:?}");
+        }
+    }
+
+    #[test]
+    fn a_dropped_card_keeps_its_slot_until_it_closes_then_leaves_without_a_jump() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let pitch = drag_style::SLOT_PITCH as f32;
+        for placement in [P::BottomLeft, P::TopLeft] {
+            let mut s = stack(placement, &[false, true, false]);
+            let rest: Vec<Rect> = (0..3).map(|i| s.card_rect(i).unwrap()).collect();
+            let now = now_ms();
+            s.begin_drag_out("a1", DragStyle::Frosted, now - 2_000.);
+            // While the file is out the imprint keeps its slot, takes no
+            // pointer and leaves the automation tree only once dropped.
+            assert_eq!(s.card_rect(0), Some(rest[0]), "{placement:?}");
+            let inside = (rest[1].left + 40., rest[1].top + 60.);
+            assert_eq!(s.hit(inside.0, inside.1), None);
+            s.pointer(Some(inside));
+            assert_ne!(s.hovered, Some(1));
+            assert!(s.uia_items().iter().any(|i| i.key == 200));
+            // Halfway through closing: still a member, the older card
+            // (index 0) moved part way toward the anchored edge and the
+            // newer one (index 2) stays put.
+            s.end_drag_out("a1", DragEnd::Dropped, now - 350.);
+            assert_eq!(s.stack.ids(), ["a0", "a1", "a2"]);
+            assert_eq!(s.prune_imprints(now_ms()), None);
+            assert!(s.uia_items().iter().all(|i| i.key != 200));
+            let older = s.card_rect(0).unwrap().top - rest[0].top;
+            let toward = if placement.is_top() { -1. } else { 1. };
+            assert!(
+                older * toward > 1. && older * toward < pitch - 1.,
+                "{placement:?}: {older}"
+            );
+            assert_eq!(s.card_rect(2), Some(rest[2]));
+            // Closed: the older card has moved the whole slot.
+            s.imprints[0].drag = {
+                let mut drag = DragOut::new(DragStyle::Frosted, now - 5_000., false);
+                drag.end(DragEnd::Dropped, now - 4_000.);
+                drag
+            };
+            let closed = s.card_rect(0).unwrap();
+            assert_eq!(closed.top, rest[0].top + toward * pitch);
+            let newest = s.card_rect(2).unwrap();
+            // Then it leaves and the window shrinks by the slot: a bottom
+            // stack's window top moves down by it, a top stack's stays, so
+            // on screen nothing moves.
+            assert_eq!(s.prune_imprints(now_ms()), Some(true));
+            assert_eq!(s.stack.ids(), ["a0", "a2"]);
+            s.height = s.content_height();
+            let window_drop = if placement.is_top() { 0. } else { pitch };
+            assert_eq!(s.card_rect(0).unwrap().top + window_drop, closed.top);
+            assert_eq!(s.card_rect(1).unwrap().top + window_drop, newest.top);
+        }
+    }
+
+    #[test]
+    fn a_returned_card_comes_back_and_hovers_again() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[false, false]);
+        s.reduced = true;
+        s.begin_drag_out("a1", DragStyle::Well, now_ms());
+        let card = s.card_rect(1).unwrap();
+        let at = (card.left + 40., card.top + 60.);
+        s.pointer(Some(at));
+        assert_eq!(s.hovered, None);
+        s.end_drag_out("a1", DragEnd::Returned, now_ms());
+        assert_eq!(s.prune_imprints(now_ms()), Some(false));
+        assert_eq!(s.stack.ids(), ["a0", "a1"]);
+        assert!(s.pointer(Some(at)));
+        assert_eq!(s.hovered, Some(1));
+    }
+
+    #[test]
+    fn carrying_a_card_reorders_the_stack_once_it_lands() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let pitch = drag_style::SLOT_PITCH;
+        for (placement, dy, want) in [
+            // Bottom stacks list oldest first from the top: carry the oldest
+            // down two slots to make it the newest.
+            (P::BottomLeft, 2. * pitch, ["a1", "a2", "a0"]),
+            // Top stacks list newest first: the oldest sits at the bottom, so
+            // carrying it up two slots makes it the newest.
+            (P::TopRight, -2. * pitch, ["a1", "a2", "a0"]),
+        ] {
+            let mut s = stack(placement, &[true, false, false]);
+            s.focus = Some(Hit::Edit(0));
+            assert!(s.can_reorder());
+            let now = now_ms();
+            s.begin_reorder(0, now);
+            // The carried card drops its hover controls; nothing takes the
+            // pointer or lights until it lands.
+            assert_eq!(s.hovered, None);
+            assert_eq!(s.hit(150., 100.), None);
+            assert!(!s.pointer(Some((150., 300.))));
+            s.reorder_pointer(dy);
+            let mut t = now;
+            for _ in 0..20 {
+                t += 16.;
+                assert!(!s.reorder_frame(t), "nothing commits before the drop");
+            }
+            s.reorder_drop(t);
+            while !s.reorder_frame(t) {
+                t += 16.;
+                assert!(t < now + 3_000., "{placement:?} never landed");
+            }
+            assert_eq!(s.stack.ids(), want, "{placement:?}");
+            let order: Vec<&str> = s.cards.iter().map(|c| c.entry.id.as_str()).collect();
+            assert_eq!(order, want);
+            // Focus followed its card to the newest slot; hover re-arms.
+            assert_eq!(s.focus, Some(Hit::Edit(2)));
+            assert_eq!(s.hovered, None);
+            let newest = s.card_rect(2).unwrap();
+            assert!(s.pointer(Some((newest.left + 40., newest.top + 60.))));
+            assert_eq!(s.hovered, Some(2));
+        }
+        // A lone card never reorders.
+        assert!(!stack(P::BottomLeft, &[false]).can_reorder());
+    }
+
+    #[test]
+    fn leaving_the_column_mid_carry_escapes_to_a_file_drag() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[false, false]);
+        s.begin_reorder(1, now_ms());
+        let card = s.card_rect(1).unwrap();
+        assert!(!s.reorder_escapes(card.right + 10., card.top));
+        assert!(s.reorder_escapes(card.right + 30., card.top));
+        assert!(s.reorder_escapes(card.left, card.bottom + 30.));
+        // Cancelling glides everything home without reordering.
+        s.reorder_pointer(-drag_style::SLOT_PITCH);
+        let mut t = now_ms();
+        s.reorder_cancel(t);
+        while !s.reorder_frame(t) {
+            t += 16.;
+        }
+        assert_eq!(s.stack.ids(), ["a0", "a1"]);
+        assert!(s.carried.is_none());
     }
 
     #[test]
