@@ -877,10 +877,15 @@ fn run(options: &Options, action: Action) {
                 h.show_updates();
             });
         }
-        Action::Preferences | Action::LeftClick => open_preferences(options),
+        // Opening Preferences checks the conflicts again, so its notes are current.
+        Action::Preferences | Action::LeftClick => {
+            open_preferences(options);
+            recheck_shortcut_conflicts();
+        }
         Action::Pressed => recheck_shortcut_conflicts(),
         Action::ChangeShortcut => {
             open_preferences(options);
+            recheck_shortcut_conflicts();
             crate::host::with_host(|h| h.show_shortcuts());
         }
         Action::History => {

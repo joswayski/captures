@@ -96,7 +96,7 @@ Screenshots, GIFs, and recordings work completely offline and never require an a
 
 ## Shortcuts
 
-Defaults match each platform’s built-in screenshot keys. `Esc` cancels an active capture or countdown and returns to other apps as soon as the capture flow closes. Global shortcuts can be changed in Preferences.
+Defaults match each platform’s built-in screenshot keys. `Esc` cancels an active capture or countdown and returns to other apps as soon as the capture flow closes. Global shortcuts can be changed in Preferences. If another app already holds one (1Password’s Quick Access uses `Cmd`/`Ctrl`+`Shift`+`Space`, for example), the menu bar or tray menu and Preferences say so and link to the shortcut to change it; neither macOS nor Windows reveals which app holds it. System shortcuts such as macOS Visual Intelligence and keys assigned through the Wayland desktop portal are not detected this way.
 
 ### macOS
 
