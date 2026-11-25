@@ -962,13 +962,14 @@ final class MiniPreviewTests: XCTestCase {
             let view = try XCTUnwrap(controller.previewView)
             let newer = try XCTUnwrap(view.card(for: "newer"))
             let older = try XCTUnwrap(view.card(for: "older"))
-            // Window coordinates grow upward; the gesture's dy grows downward.
+            // Cards sit in the flipped document, so their y grows downward
+            // like the gesture's dy; window coordinates grow upward.
             let travel = older.frame.midY - newer.frame.midY
             let press = newer.convert(NSPoint(x: newer.bounds.midX, y: newer.bounds.midY), to: nil)
             XCTAssertTrue(newer.reorderBegan(), "\(placement): a vertical press in an expanded stack reorders")
             XCTAssertTrue(newer.carrying)
             for step in 1...12 {
-                let dy = -travel * CGFloat(step) / 12
+                let dy = travel * CGFloat(step) / 12
                 XCTAssertFalse(newer.reorderMoved(dy, NSPoint(x: press.x, y: press.y - dy)),
                                "\(placement): moving within the stack stays a reorder")
                 RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 60))
