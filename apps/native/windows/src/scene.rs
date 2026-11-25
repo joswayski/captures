@@ -3876,7 +3876,7 @@ impl Scene {
         &mut self,
         conflicts: &[captures_app::shortcuts::CaptureShortcut],
     ) -> bool {
-        use captures_app::shortcuts::CONFLICT_NOTE;
+        use captures_app::shortcuts::{CONFLICT_SUFFIX, conflict_note};
         let mut changed = false;
         for index in 0..SHORTCUT_ROWS.len() {
             if self.recording == Some(index) {
@@ -3884,8 +3884,8 @@ impl Scene {
             }
             let conflict = conflicts.iter().any(|action| *action as usize == index);
             let message = if conflict {
-                CONFLICT_NOTE.to_owned()
-            } else if self.shortcut_errors[index] == CONFLICT_NOTE {
+                conflict_note(shortcut_ref(&self.settings, index), PLATFORM)
+            } else if self.shortcut_errors[index].ends_with(CONFLICT_SUFFIX) {
                 String::new()
             } else {
                 continue;

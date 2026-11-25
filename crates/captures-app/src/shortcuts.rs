@@ -43,6 +43,19 @@ impl CaptureShortcut {
         }
     }
 
+    /// The tray item this shortcut runs.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NewCapture => "New Capture",
+            Self::Region => "Screenshot Region",
+            Self::Window => "Screenshot Window",
+            Self::Display => "Screenshot Display",
+            Self::RecordRegion => "Record Region",
+            Self::RecordWindow => "Record Window",
+            Self::RecordDisplay => "Record Display",
+        }
+    }
+
     pub fn is_recording(self) -> bool {
         matches!(
             self,
@@ -86,26 +99,43 @@ pub fn selector_input_scope() -> Option<SelectorInputScope> {
     routes.input_scope()
 }
 
-/// The tray row for a shortcut another app holds. Neither macOS nor Windows
-/// says which app holds a chord, so the copy cannot name it.
-pub fn conflict_menu_label(shortcut: &str, platform: ShortcutPlatform) -> String {
+/// The end of every conflict note, so a host can tell its note from a
+/// recorder error.
+pub const CONFLICT_SUFFIX: &str = " is used by another app";
+
+/// The tray row for a shortcut another app holds, pinned at the top of the
+/// menu: which shortcut, its keys, and that choosing it fixes it. Neither
+/// macOS nor Windows says which app holds a chord, so the copy cannot name it.
+pub fn conflict_menu_label(
+    action: CaptureShortcut,
+    shortcut: &str,
+    platform: ShortcutPlatform,
+) -> String {
     format!(
-        "{} is used by another app — Change Shortcut…",
+        "{} shortcut ({}){CONFLICT_SUFFIX} — Change…",
+        action.label(),
         shortcut_display_tokens(shortcut, platform).join("+")
     )
 }
 
-/// The Preferences note under a shortcut another app holds; one line under
-/// the recorder, so the tray row carries the instruction.
-pub const CONFLICT_NOTE: &str = "Used by another app";
+/// The Preferences note under the recorder whose chord another app holds.
+pub fn conflict_note(shortcut: &str, platform: ShortcutPlatform) -> String {
+    format!(
+        "{}{CONFLICT_SUFFIX}",
+        shortcut_display_tokens(shortcut, platform).join("+")
+    )
+}
 
-/// The tray tooltip while any shortcut is held by another app; `base` is the
+/// The tray tooltip while shortcuts are held by another app; `base` is the
 /// update state's tooltip otherwise.
-pub fn conflict_tooltip(base: String, conflicts: usize) -> String {
+pub fn conflict_tooltip(base: String, conflicts: &[CaptureShortcut]) -> String {
     match conflicts {
-        0 => base,
-        1 => "Captures — A shortcut is used by another app".into(),
-        _ => "Captures — Some shortcuts are used by another app".into(),
+        [] => base,
+        [action] => format!("Captures — {} shortcut{CONFLICT_SUFFIX}", action.label()),
+        _ => format!(
+            "Captures — {} shortcuts are used by other apps",
+            conflicts.len()
+        ),
     }
 }
 
@@ -1723,15 +1753,33 @@ mod tests {
 
     #[test]
     fn conflict_copy_shows_the_platform_keys() {
+        let new_capture = CaptureShortcut::NewCapture;
+        let space = "CommandOrControl+Shift+Space";
         assert_eq!(
-            conflict_menu_label("CommandOrControl+Shift+Space", ShortcutPlatform::Macos),
-            "Cmd+Shift+Space is used by another app — Change Shortcut…"
+            conflict_menu_label(new_capture, space, ShortcutPlatform::Macos),
+            "New Capture shortcut (Cmd+Shift+Space) is used by another app — Change…"
         );
         assert_eq!(
-            conflict_menu_label("CommandOrControl+Shift+Space", ShortcutPlatform::Windows),
-            "Ctrl+Shift+Space is used by another app — Change Shortcut…"
+            conflict_menu_label(
+                CaptureShortcut::RecordRegion,
+                "Super+Alt+R",
+                ShortcutPlatform::Windows
+            ),
+            "Record Region shortcut (Win+Alt+R) is used by another app — Change…"
         );
-        assert_eq!(conflict_tooltip("Captures".into(), 0), "Captures");
+        assert_eq!(
+            conflict_note(space, ShortcutPlatform::Windows),
+            "Ctrl+Shift+Space is used by another app"
+        );
+        assert_eq!(conflict_tooltip("Captures".into(), &[]), "Captures");
+        assert_eq!(
+            conflict_tooltip(String::new(), &[new_capture]),
+            "Captures — New Capture shortcut is used by another app"
+        );
+        assert_eq!(
+            conflict_tooltip(String::new(), &[new_capture, CaptureShortcut::Region]),
+            "Captures — 2 shortcuts are used by other apps"
+        );
     }
 
     #[test]

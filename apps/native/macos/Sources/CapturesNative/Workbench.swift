@@ -744,6 +744,11 @@ final class LiveStatusActions: NSObject, NSMenuDelegate {
         // An available or installing update moves to the top, like shipping.
         let pinned = updateItem?.pinFirst == true
         if pinned { menu.addItem(updates); menu.addItem(.separator()) }
+        // A shortcut another app holds is pinned first, each naming its action,
+        // so the menu says which one never fires before anything else.
+        let held = Self.shortcutOrder.compactMap { conflicts[$0] }
+        for label in held { add(label, action: #selector(changeShortcut), to: menu) }
+        if !held.isEmpty { menu.addItem(.separator()) }
         add("New Capture…", action: #selector(newCapture), shortcut: 0, to: menu)
         add("Screenshot Region", action: #selector(captureRegion), shortcut: 1, to: menu)
         add("Screenshot Window", action: #selector(captureWindow), shortcut: 2, to: menu)
@@ -751,9 +756,6 @@ final class LiveStatusActions: NSObject, NSMenuDelegate {
         add("Record Region", action: #selector(recordRegion), shortcut: 4, to: menu)
         add("Record Window", action: #selector(recordWindow), shortcut: 5, to: menu)
         add("Record Display", action: #selector(recordDisplay), shortcut: 6, to: menu)
-        for action in Self.shortcutOrder {
-            if let label = conflicts[action] { add(label, action: #selector(changeShortcut), to: menu) }
-        }
         menu.addItem(.separator())
         add("Capture History", action: #selector(showHistory), to: menu)
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)

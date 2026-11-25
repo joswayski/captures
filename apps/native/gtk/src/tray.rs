@@ -202,6 +202,17 @@ fn menu(
         append(&update_row())?;
         append(&PredefinedMenuItem::separator())?;
     }
+    // A shortcut another app holds is pinned first, each naming its action,
+    // so the menu says which one never fires before anything else.
+    for action in conflicts {
+        let keys = shortcut_text(settings, *action);
+        let label = conflict_menu_label(*action, keys, ShortcutPlatform::Linux);
+        let id = format!("{CHANGE_SHORTCUT}{}", action.id());
+        append(&MenuItem::with_id(id, label, true, None))?;
+    }
+    if !conflicts.is_empty() {
+        append(&PredefinedMenuItem::separator())?;
+    }
     for row in &MENU {
         match *row {
             Row::Item(id, label, _, keys) => append(&MenuItem::with_id(
@@ -217,15 +228,6 @@ fn menu(
             Row::Updates if !update.pin_first => append(&update_row())?,
             Row::Updates => {}
             Row::Separator => append(&PredefinedMenuItem::separator())?,
-        }
-        // Conflict rows follow Record Display, before the first separator.
-        if matches!(row, Row::Item(_, _, _, Some(Shortcut::RecordDisplay))) {
-            for action in conflicts {
-                let label =
-                    conflict_menu_label(shortcut_text(settings, *action), ShortcutPlatform::Linux);
-                let id = format!("{CHANGE_SHORTCUT}{}", action.id());
-                append(&MenuItem::with_id(id, label, true, None))?;
-            }
         }
     }
     Ok(menu)
@@ -253,7 +255,7 @@ impl Tray {
     }
 
     fn refresh_tooltip(&self) {
-        let tooltip = conflict_tooltip(self.update_tooltip.to_owned(), self.conflicts.len());
+        let tooltip = conflict_tooltip(self.update_tooltip.to_owned(), &self.conflicts);
         if let Err(error) = self.icon.set_tooltip(Some(tooltip)) {
             eprintln!("Could not refresh the tray tooltip: {error}");
         }

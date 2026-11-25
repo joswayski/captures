@@ -193,6 +193,22 @@ fn menu(
             .and_then(|()| menu.append(&PredefinedMenuItem::separator()))
             .map_err(|error| error.to_string())?;
     }
+    // A shortcut another app holds is pinned first, each naming its action,
+    // so the menu says which one never fires before anything else.
+    for action in conflicts {
+        let label = conflict_menu_label(
+            *action,
+            shortcut_text(settings, *action),
+            ShortcutPlatform::Windows,
+        );
+        let id = format!("{CHANGE_SHORTCUT}{}", action.id());
+        menu.append(&MenuItem::with_id(id, label, true, None))
+            .map_err(|error| error.to_string())?;
+    }
+    if !conflicts.is_empty() {
+        menu.append(&PredefinedMenuItem::separator())
+            .map_err(|error| error.to_string())?;
+    }
     for row in &MENU {
         let result = match *row {
             // Shipping `tray_menu_item`: a row whose accelerator the menu
@@ -214,18 +230,6 @@ fn menu(
             Row::Separator => menu.append(&PredefinedMenuItem::separator()),
         };
         result.map_err(|error| error.to_string())?;
-        // Conflict rows follow Record Display, before the first separator.
-        if matches!(row, Row::Item(_, _, _, Some(Shortcut::RecordDisplay))) {
-            for action in conflicts {
-                let label = conflict_menu_label(
-                    shortcut_text(settings, *action),
-                    ShortcutPlatform::Windows,
-                );
-                let id = format!("{CHANGE_SHORTCUT}{}", action.id());
-                menu.append(&MenuItem::with_id(id, label, true, None))
-                    .map_err(|error| error.to_string())?;
-            }
-        }
     }
     Ok(menu)
 }
@@ -327,7 +331,7 @@ impl Tray {
     }
 
     fn refresh_tooltip(&self) {
-        let tooltip = conflict_tooltip(self.update_tooltip.to_owned(), self.conflicts.len());
+        let tooltip = conflict_tooltip(self.update_tooltip.to_owned(), &self.conflicts);
         if let Err(error) = self.icon.set_tooltip(Some(tooltip)) {
             eprintln!("Could not refresh the tray tooltip: {error}");
         }
@@ -425,19 +429,19 @@ mod tests {
         )
         .unwrap();
         let items = conflicted.items();
-        assert_eq!(items[0].id().0, "new-capture");
-        let row = items[7].as_menuitem().unwrap();
+        let row = items[0].as_menuitem().unwrap();
         assert_eq!(
             row.text(),
-            "Ctrl+Shift+Space is used by another app — Change Shortcut…"
+            "New Capture shortcut (Ctrl+Shift+Space) is used by another app — Change…"
         );
         assert_eq!(action(&row.id().0), Some(Action::ChangeShortcut));
         assert!(matches!(
-            items[8],
+            items[1],
             tray_icon::menu::MenuItemKind::Predefined(_)
         ));
+        assert_eq!(items[2].id().0, "new-capture");
         let resting = menu(&settings, &tray_update_item(None), &[]).unwrap();
-        assert_eq!(items.len(), resting.items().len() + 1);
+        assert_eq!(items.len(), resting.items().len() + 2);
     }
 
     #[test]

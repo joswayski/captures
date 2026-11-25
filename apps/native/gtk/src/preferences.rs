@@ -203,6 +203,9 @@ pub fn restyle(tokens: Rc<Tokens>) {
 pub fn set_shortcut_conflicts(paths: Vec<String>) {
     if let Some(prefs) = OPEN.with(|open| open.borrow().upgrade()) {
         for (path, note) in prefs.conflict_notes.borrow().iter() {
+            if let Some(keys) = prefs.get(path).as_str() {
+                note.set_label(&captures_app::shortcuts::conflict_note(keys, PLATFORM));
+            }
             note.set_visible(paths.contains(path));
         }
         prefs.conflicts.replace(paths);
@@ -1560,8 +1563,13 @@ fn shortcut_row(prefs: &Rc<Prefs>, title: &'static str, path: String) -> gtk::Bo
     error.set_visible(false);
     error.set_accessible_role(gtk::AccessibleRole::Status);
     control.append(&error);
-    let note = label(captures_app::shortcuts::CONFLICT_NOTE, "shortcut-error");
+    let saved_keys = prefs.get(&path).as_str().unwrap_or_default().to_owned();
+    let note = label(
+        &captures_app::shortcuts::conflict_note(&saved_keys, PLATFORM),
+        "shortcut-error",
+    );
     note.set_xalign(0.);
+    note.set_wrap(true);
     note.set_visible(prefs.conflicts.borrow().contains(&path));
     note.set_accessible_role(gtk::AccessibleRole::Status);
     control.append(&note);

@@ -74,21 +74,20 @@ final class StatusItemTests: XCTestCase {
         let resting = target.makeMenu()
         XCTAssertEqual(resting.items[0].keyEquivalent, " ")
         // The menu checks again as it opens and repopulates in place.
-        target.willOpen = {
-            target.conflicts = [.newCapture: "Cmd+Shift+Space is used by another app — Change Shortcut…"]
-        }
+        let row = "New Capture shortcut (Cmd+Shift+Space) is used by another app — Change…"
+        target.willOpen = { target.conflicts = [.newCapture: row] }
         target.menuNeedsUpdate(resting)
-        XCTAssertEqual(resting.items[0].title, "New Capture…")
-        XCTAssertEqual(resting.items[0].keyEquivalent, "", "a chord that never fires shows no hint")
-        XCTAssertEqual(resting.items[1].keyEquivalent, "4")
-        XCTAssertEqual(resting.items[7].title, "Cmd+Shift+Space is used by another app — Change Shortcut…")
-        XCTAssertEqual(resting.items[8].title, "")
-        resting.performActionForItem(at: 7)
+        XCTAssertEqual(resting.items[0].title, row, "the conflict is pinned first")
+        XCTAssertEqual(resting.items[1].title, "")
+        XCTAssertEqual(resting.items[2].title, "New Capture…")
+        XCTAssertEqual(resting.items[2].keyEquivalent, "", "a chord that never fires shows no hint")
+        XCTAssertEqual(resting.items[3].keyEquivalent, "4")
+        resting.performActionForItem(at: 0)
         XCTAssertEqual(changes, 1)
         target.willOpen = { target.conflicts = [:] }
         target.menuNeedsUpdate(resting)
+        XCTAssertEqual(resting.items[0].title, "New Capture…")
         XCTAssertEqual(resting.items[0].keyEquivalent, " ")
-        XCTAssertEqual(resting.items[7].title, "")
     }
 
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
