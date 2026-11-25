@@ -1392,7 +1392,14 @@ pub fn paint(
             true,
             (0., 0., 1.),
             0.,
-            c("surface-raised"),
+            // Under an update's card the caret continues its footer bar.
+            c(
+                if p.icon == Icon::None && placement.caret == Caret::Bottom {
+                    "surface-sunken"
+                } else {
+                    "surface-raised"
+                },
+            ),
         )?;
     }
     // The grid inside the border.
@@ -2003,11 +2010,15 @@ pub fn paint(
             }
         } else {
             // The scroller: the rest of the section, clipped.
-            let view = rect(ix, iy, bx1 - 1. - s5, section.bottom - 1. - s5);
+            // An update's list spans the inner width, as its text was laid out.
+            let view_right = if update { bx1 } else { bx1 - 1. - s5 };
+            let view = rect(ix, iy, view_right, section.bottom - 1. - s5);
+            // One list continues across releases without a rule between them.
+            let group_gap = if update { s4 } else { s5 + 1. + s4 };
             let mut natural = 0.;
             for (index, group) in groups.iter().enumerate() {
                 if index > 0 {
-                    natural += s5 + 1. + s4;
+                    natural += group_gap;
                 }
                 if let Some(h3) = &group.heading {
                     natural += h3.height + s3;
@@ -2027,7 +2038,9 @@ pub fn paint(
             let visible = |r: D2D_RECT_F| r.bottom > view.top && r.top < view.bottom;
             let mut result = Ok(());
             for (index, (group, source)) in groups.iter().zip(&notes.groups).enumerate() {
-                if index > 0 {
+                if index > 0 && update {
+                    gy += group_gap;
+                } else if index > 0 {
                     gy += s5;
                     result = result.and(gfx::fill(
                         dc,
