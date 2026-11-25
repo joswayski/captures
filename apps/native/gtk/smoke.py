@@ -1159,7 +1159,32 @@ def previews(binary, scratch):
         press(find(stack, "push button", "Edit")[0])
         pill = wait(lambda: find(stack, "push button", "Show in editor"), "the In editor pill")[0]
         assert has_state(pill, Atspi.StateType.PRESSED), "the present pill is pressed"
-        DESKTOP.close(DESKTOP.window("Captures Screenshot Editor"))
+        # A rectangle drawn in the editor shows on its card at once, and the
+        # card's file drag carries it once the draft autosaves.
+        previews_window = DESKTOP.window("Captures Previews", process.pid)
+        shot = lambda: subprocess.run(["import", "-window", previews_window, "rgba:-"],
+                                      capture_output=True, check=True).stdout
+        time.sleep(1)  # The pill's grow animation settles first.
+        before = shot()
+        canvas = wait(lambda: find(app, "image", "Screenshot canvas"), "the editor canvas")[0]
+        wait(lambda: find(app, "list item", "Original screenshot · Locked background"),
+             "the background layer")
+        press(wait(lambda: find(app, "push button", "Shapes · Rectangle (R)"), "Shapes")[0])
+        press(wait(lambda: find(app, "push button", "Rectangle (R)"), "the Shapes flyout")[0])
+        wait(lambda: not find(app, "push button", "Rectangle (R)"), "the flyout to close")
+        editor_window = DESKTOP.window("Captures Screenshot Editor")
+        origin_x, origin_y = DESKTOP.origin(editor_window)
+        extents = canvas.get_extents(Atspi.CoordType.WINDOW)
+        x, y = origin_x + extents.x + 60, origin_y + extents.y + 60
+        DESKTOP.drag(x, y, x + 200, y + 140)
+        wait(lambda: any(name.startswith("Rectangle") for _, (role, name) in nodes(app)
+                         if role == "list item"), "a rectangle layer")
+        wait(lambda: shot() != before, "the card to show the rectangle", 5)
+        drafts = root.with_name("editor-drafts")
+        wait(lambda: any((drafts / entry.name / "render.png").is_file() for entry in root.iterdir()),
+             "the autosaved render for drags", 5)
+        print("previews: the card followed the editor and its drag export has the edit")
+        DESKTOP.close(editor_window)
         wait(lambda: len(find(stack, "push button", "Edit")) == 2
              and not find(stack, "push button", "Show in editor"), "Edit after the editor closes")
         press(find(stack, "push button", "Copy")[0])

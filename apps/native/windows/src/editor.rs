@@ -542,6 +542,8 @@ enum Outcome {
         std::result::Result<editor_export::ExportEstimate, String>,
         Option<Image>,
     ),
+    /// The canvas at mini preview size.
+    Thumbnail(RgbaImage),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -963,6 +965,8 @@ struct Published {
     /// The thumbnails last sent, by layer ID, with the session image each
     /// came from: an unchanged layer reuses its conversion.
     thumbs: BTreeMap<String, (Arc<RgbaImage>, Arc<Thumb>)>,
+    /// Takes each new frame for the capture's mini preview (`live_thumbnail`).
+    canvas: Option<Sender<Arc<RgbaImage>>>,
 }
 
 /// `(x, y, width, height)` in canvas pixels.
@@ -993,6 +997,9 @@ fn publish(
     let size = rgba.dimensions();
     if published.shows(Arc::as_ptr(&rgba)) {
         return None;
+    }
+    if let Some(canvas) = &published.canvas {
+        let _ = canvas.send(rgba.clone());
     }
     let pixels = |rect: Option<(u32, u32, u32, u32)>| Pixels {
         width: size.0,
@@ -1197,7 +1204,29 @@ fn spawn_worker(
             // A just-closed editor for this artifact may still be committing
             // its label and writing the draft this session restores.
             join_until(previous, Instant::now() + WORKER_EXIT_WAIT);
-            let mut published = Published::default();
+            // The capture's mini preview follows the canvas, drawing previews
+            // included. Scaling only the newest frame keeps it from lagging.
+            let (canvas, frames) = std::sync::mpsc::channel::<Arc<RgbaImage>>();
+            let thumbnails = results.clone();
+            std::thread::Builder::new()
+                .name("captures-editor-thumbnail".into())
+                .spawn(move || {
+                    while let Ok(mut frame) = frames.recv() {
+                        while let Ok(newer) = frames.try_recv() {
+                            frame = newer;
+                        }
+                        let thumbnail = captures_history::live_thumbnail(&frame);
+                        if thumbnails.send(Outcome::Thumbnail(thumbnail)).is_err() {
+                            return;
+                        }
+                        post(hwnd, WM_APP_OUTCOME);
+                    }
+                })
+                .expect("editor thumbnail worker");
+            let mut published = Published {
+                canvas: Some(canvas),
+                ..Published::default()
+            };
             // The History entry's size: Preserve's Est. size baseline.
             let original_bytes = editor_export::original_size_bytes(&root, &id);
             let send = |outcome| {
@@ -2597,6 +2626,10 @@ impl Editor {
                 }
             }
             Outcome::Estimated(result, after) => self.receive_estimate(result, after),
+            Outcome::Thumbnail(image) => {
+                crate::previews::show_edited(&self.artifact_id, &image);
+                return;
+            }
             Outcome::Preview(result) => {
                 self.preview_busy = false;
                 let now = Instant::now();

@@ -2422,6 +2422,10 @@ impl EditorSession {
                 .map(|fonts| &fonts.assets),
         )
         .map_err(|error| error.to_string())?;
+        // Mini preview and History drags export the edited image from here.
+        captures_history::encode_png(&self.frame.pixels)
+            .and_then(|png| editor_draft::save_render(&self.drafts_root, &self.artifact_id, &png))
+            .map_err(|error| error.to_string())?;
         self.persisted_assets = sources(document).into_iter().map(str::to_owned).collect();
         self.persisted = document.clone();
         self.has_draft = true;

@@ -4206,6 +4206,27 @@ pub fn set_suppressed(suppressed: bool) {
     });
 }
 
+/// An open screenshot editor's canvas for this capture: its card shows the
+/// edit as it happens.
+pub fn show_edited(id: &str, image: &image::RgbaImage) {
+    PREVIEWS.with(|p| {
+        let Ok(mut p) = p.try_borrow_mut() else {
+            return;
+        };
+        let Some(previews) = p.as_mut() else { return };
+        let Ok(bitmap) = crate::capture::bitmap(&previews.g, image) else {
+            return;
+        };
+        let Some(card) = previews.stack.cards.iter_mut().find(|c| c.entry.id == id) else {
+            return;
+        };
+        card.image = Some(bitmap);
+        if let Err(error) = previews.render() {
+            eprintln!("Could not redraw the mini previews: {error}");
+        }
+    });
+}
+
 /// Settings changed elsewhere: redraw the stack in the saved appearance and
 /// accent.
 pub fn settings_changed(settings: &captures_settings::AppSettings) {

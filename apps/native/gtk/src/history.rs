@@ -1410,7 +1410,7 @@ impl CardView {
                 if card.action_kinds.borrow().is_empty() {
                     return;
                 }
-                let path = media_path(&state.root, &entry);
+                let path = drag_path(&state.root, &entry);
                 *file.borrow_mut() = Some(gio::File::for_path(path));
             });
             let uri = file.into_inner()?.uri();
@@ -1605,6 +1605,20 @@ impl CardView {
             .insert(self.id.borrow().clone(), error);
         self.restyle(state);
     }
+}
+
+/// The file a drag out of History or a mini preview offers: a screenshot's
+/// unsaved editor edits, exported by `preview_drag::prepare`, when its draft
+/// has them; otherwise the capture itself.
+pub fn drag_path(root: &Path, entry: &HistoryEntry) -> PathBuf {
+    let drafts = root.with_file_name("editor-drafts");
+    if !entry.kind.is_recording()
+        && captures_history::editor_draft::render_path(&drafts, &entry.id).is_some()
+        && let Ok(path) = captures_app::preview_drag::prepare(root, &entry.id)
+    {
+        return path;
+    }
+    media_path(root, entry)
 }
 
 pub fn media_path(root: &Path, entry: &HistoryEntry) -> PathBuf {

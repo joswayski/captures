@@ -909,6 +909,16 @@ impl Host {
             },
             mode.unwrap_or(captures_capture::CaptureMode::Region),
         ));
+        // The capture's mini preview follows the edit live.
+        let host = Rc::downgrade(self);
+        let id = artifact_id.to_owned();
+        editor.connect_canvas_changed(move |texture| {
+            if let Some(host) = host.upgrade()
+                && let Some(previews) = host.previews.borrow().as_ref()
+            {
+                previews.show_edited(&id, texture);
+            }
+        });
         let host = Rc::downgrade(self);
         let id = artifact_id.to_owned();
         editor.window.connect_close_request(move |_| {
@@ -1113,6 +1123,13 @@ fn main() -> glib::ExitCode {
             }
         });
         if let Some(instance) = instance.borrow_mut().take() {
+            // The last session's exports of edited screenshots for drags.
+            let drags = host.history_root.clone();
+            std::thread::spawn(move || {
+                if let Err(error) = captures_app::preview_drag::clear_previous_exports(&drags) {
+                    eprintln!("couldn't clear old drag exports: {error}");
+                }
+            });
             if let Some(script) = &options.update_script {
                 updates::use_script(script);
             }

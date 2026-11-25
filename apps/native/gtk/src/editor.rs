@@ -304,6 +304,9 @@ type LayerRowKey = (
 /// Set after construction, once the editor state can be captured.
 type PresetHandler = Rc<RefCell<Option<Box<dyn Fn(String)>>>>;
 
+/// Takes each new canvas texture (`Editor::connect_canvas_changed`).
+type CanvasChanged = Box<dyn Fn(&gdk::Texture)>;
+
 pub struct Editor {
     pub window: gtk::ApplicationWindow,
     state: Rc<State>,
@@ -318,6 +321,8 @@ struct State {
     session: Arc<std::sync::Mutex<Option<EditorSession>>>,
     presented: RefCell<Option<Presented>>,
     texture: RefCell<Option<gdk::Texture>>,
+    /// Takes each new canvas texture, for the capture's mini preview.
+    canvas_changed: RefCell<CanvasChanged>,
     viewport: Cell<Viewport>,
     tool: RefCell<String>,
     last_shape: RefCell<String>,
@@ -1095,6 +1100,7 @@ pub fn build(
         session,
         presented: RefCell::default(),
         texture: RefCell::default(),
+        canvas_changed: RefCell::new(Box::new(|_| {})),
         viewport: Cell::default(),
         tool: RefCell::new("v".into()),
         last_shape: RefCell::new("rectangle".into()),
@@ -1214,6 +1220,11 @@ pub fn build(
 impl Editor {
     pub fn present(&self) {
         self.window.present();
+    }
+
+    /// Follow the canvas as shown, brush and layer drag previews included.
+    pub fn connect_canvas_changed(&self, f: impl Fn(&gdk::Texture) + 'static) {
+        *self.state.canvas_changed.borrow_mut() = Box::new(f);
     }
 
     /// Preferences changed the appearance or accent: draw with `tokens` from
@@ -2119,7 +2130,7 @@ impl State {
                     .as_ref()
                     .is_none_or(|old| !Arc::ptr_eq(&old.pixels, &presented.pixels));
                 if changed_pixels {
-                    *self.texture.borrow_mut() = Some(texture_of(&presented.pixels));
+                    self.show_frame(&presented.pixels);
                 }
                 let old_count = self
                     .presented
@@ -2188,7 +2199,7 @@ impl State {
                     // Only a gesture still in progress shows its preview; the
                     // committed result replaces it once the worker publishes.
                     Ok(frame) if stroking => {
-                        *self.texture.borrow_mut() = Some(texture_of(&frame.pixels));
+                        self.show_frame(&frame.pixels);
                         *self.gesture_frame.borrow_mut() = Some(frame);
                         self.canvas.queue_draw();
                     }
@@ -4103,9 +4114,16 @@ impl State {
         if self.gesture_frame.borrow_mut().take().is_some()
             && let Some(presented) = self.presented.borrow().as_ref()
         {
-            *self.texture.borrow_mut() = Some(texture_of(&presented.pixels));
+            self.show_frame(&presented.pixels);
         }
         self.canvas.queue_draw();
+    }
+
+    /// Upload a frame for the canvas and hand it to the mini preview.
+    fn show_frame(&self, pixels: &RgbaImage) {
+        let texture = texture_of(pixels);
+        (self.canvas_changed.borrow())(&texture);
+        *self.texture.borrow_mut() = Some(texture);
     }
 
     /// Grip cursors and shipping's hover tips over the selected layer.

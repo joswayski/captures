@@ -20,6 +20,7 @@ const SCHEMA_VERSION: u16 = 1;
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIR: &str = "assets";
 const FONTS_DIR: &str = "fonts";
+const RENDER_FILE: &str = "render.png";
 const MAX_ASSETS: usize = 64;
 const MAX_TOTAL_BYTES: usize = 80 * 1024 * 1024;
 pub const MAX_IMAGE_BYTES: usize = 256 * 1024 * 1024;
@@ -330,6 +331,26 @@ pub fn discard(drafts: &Path, artifact_id: &str) -> Result<(), Error> {
     }
     fs::remove_dir_all(root)?;
     Ok(())
+}
+
+/// Store the draft's flattened PNG beside its manifest, so a file dragged out
+/// of a mini preview or History carries the unsaved edits. A failed write
+/// removes the previous render rather than leave older edits in place.
+pub fn save_render(drafts: &Path, artifact_id: &str, png: &[u8]) -> Result<(), Error> {
+    validate_component_id(artifact_id)?;
+    let path = drafts.join(artifact_id).join(RENDER_FILE);
+    write_atomically(&path, png).inspect_err(|_| {
+        let _ = fs::remove_file(&path);
+    })
+}
+
+/// The flattened PNG of a saved draft, when one exists.
+#[must_use]
+pub fn render_path(drafts: &Path, artifact_id: &str) -> Option<PathBuf> {
+    validate_component_id(artifact_id).ok()?;
+    let root = drafts.join(artifact_id);
+    let render = root.join(RENDER_FILE);
+    (root.join(MANIFEST_FILE).is_file() && render.is_file()).then_some(render)
 }
 
 pub fn read_asset(drafts: &Path, artifact_id: &str, asset_id: &str) -> Result<Vec<u8>, Error> {

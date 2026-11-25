@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use captures_history::ArtifactKind;
+use captures_history::{ArtifactKind, editor_draft};
 
 use crate::Error;
 
@@ -23,12 +23,29 @@ pub fn clear_previous_exports(root: &Path) -> Result<(), Error> {
 }
 
 /// Resolve the exact persisted artifact, not an image shown by the current card.
+/// A screenshot with an editor draft exports the draft's flattened edits under
+/// its saved file's name, since the saved file and History image lack them.
 /// A unique directory prevents simultaneous drags from replacing one another's bytes.
 pub fn prepare(root: &Path, id: &str) -> Result<PathBuf, Error> {
     let entry = captures_history::load_entry(root, id, chrono::Utc::now())
         .ok()
         .flatten()
         .ok_or(Error::Missing)?;
+    // Every host keeps drafts in `editor-drafts` beside the History root.
+    let edited = (entry.kind == ArtifactKind::Screenshot)
+        .then(|| editor_draft::render_path(&root.with_file_name("editor-drafts"), id))
+        .flatten();
+    if let Some(render) = edited {
+        let stem = entry
+            .saved_path
+            .as_deref()
+            .and_then(|path| Path::new(path).file_stem())
+            .map_or_else(
+                || format!("Captures_{id}"),
+                |stem| stem.to_string_lossy().into_owned(),
+            );
+        return copy_export(root, &render, &format!("{stem}.png"));
+    }
     if let Some(path) = entry
         .saved_path
         .as_deref()
@@ -53,9 +70,13 @@ pub fn prepare(root: &Path, id: &str) -> Result<PathBuf, Error> {
             .and_then(|e| e.to_str())
             .ok_or(Error::Missing)?
     };
+    copy_export(root, &source, &format!("Captures_{id}.{extension}"))
+}
+
+fn copy_export(root: &Path, source: &Path, name: &str) -> Result<PathBuf, Error> {
     let destination = root.join(EXPORTS).join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&destination)?;
-    let path = destination.join(format!("Captures_{}.{}", id, extension));
+    let path = destination.join(name);
     fs::copy(source, &path)?;
     Ok(fs::canonicalize(path)?)
 }

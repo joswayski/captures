@@ -5726,6 +5726,38 @@ fn draft_autosave_debounces_each_edit_and_flushes_on_close() {
 }
 
 #[test]
+fn a_preview_drag_carries_autosaved_edits_until_they_are_undone() {
+    let (data, id, original) = setup();
+    let history = data.path().join("history");
+    let mut editor = EditorSession::open(OpenRequest {
+        history_root: history.clone(),
+        // Where every native host keeps drafts, beside the History root.
+        drafts_root: data.path().join("editor-drafts"),
+        artifact_id: id.clone(),
+        source_artifact_id: None,
+    })
+    .unwrap();
+    let dragged = |history: &Path| {
+        image::open(captures_app::preview_drag::prepare(history, &id).unwrap())
+            .unwrap()
+            .to_rgba8()
+    };
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 1 })
+        .unwrap();
+    let edited = editor.pixels();
+    assert_eq!(edited.dimensions(), (4, 2));
+    assert_eq!(dragged(&history), *edited);
+
+    editor.execute(Request::Undo).unwrap();
+    editor
+        .execute(Request::AutosaveDraft { updated_at_ms: 2 })
+        .unwrap();
+    assert_eq!(dragged(&history), original);
+}
+
+#[test]
 fn autosave_writes_only_new_images_and_drops_a_draft_back_at_the_capture() {
     let (data, id, original) = setup();
     let folder = data.path().join("drafts").join(&id);

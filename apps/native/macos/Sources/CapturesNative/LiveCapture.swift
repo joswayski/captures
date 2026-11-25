@@ -3658,6 +3658,14 @@ final class LiveCaptureController: NSObject {
                         self?.miniPreviews?.setEditorArtifacts(artifactIDs)
                         self?.editorsChanged()
                     }
+                    // Its mini preview follows the edit live, and its drag
+                    // exports each saved draft.
+                    self.screenshotEditor?.canvasChanged = { [weak self] artifactID, image in
+                        self?.miniPreviews?.showEdited(image, for: artifactID)
+                    }
+                    self.screenshotEditor?.draftSaved = { [weak self] artifactID in
+                        self?.miniPreviews?.refreshFileDrag(for: artifactID)
+                    }
                     // A closed editor is released and rebuilt on the next open,
                     // so its window and graphics memory are not kept idle.
                     self.screenshotEditor?.didClose = { [weak self] in

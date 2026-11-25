@@ -29,7 +29,7 @@ struct MiniPreviewSettings: Equatable {
 }
 
 private final class MiniPreviewImageView: NSView {
-    let image: NSImage
+    var image: NSImage { didSet { needsDisplay = true } }
     init(frame: NSRect, image: NSImage) { self.image = image; super.init(frame: frame) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     /// Hand Core Animation a bitmap of `draw(_:)` as the layer's contents.
@@ -1077,6 +1077,15 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         return seconds > 0
     }
 
+    /// Show new media, such as an open editor's canvas, in place.
+    func setMedia(_ image: NSImage) {
+        imageView.image = image
+        backdrops.removeAll()
+        // Chrome backdrops show the media as presented.
+        actionButtons.forEach { $0.needsDisplay = true }
+        [sizeLabel, warningLabel].forEach { $0.needsDisplay = true }
+    }
+
     /// The media as a dust source: cover-cropped to the card in its rounded
     /// rect, unfiltered (the chips carry the hover blur and brightness).
     func dustSource(scale: CGFloat) -> CGImage? {
@@ -1729,7 +1738,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
 struct MiniPreviewResource {
     var artifact: CaptureArtifact
-    let image: NSImage
+    var image: NSImage
     var generation = 0
 }
 
@@ -3578,6 +3587,22 @@ final class MiniPreviewController {
             panel?.previewView.updateSavedState(refreshed.savedPath != nil, for: artifact.id)
             if changedExport { prepareFileDrag(for: refreshed) }
         }
+    }
+
+    /// The screenshot editor's canvas for this capture: the card shows the
+    /// edit as it happens and keeps it through stack rebuilds.
+    func showEdited(_ image: NSImage, for artifactID: String) {
+        precondition(Thread.isMainThread)
+        guard resources[artifactID] != nil else { return }
+        resources[artifactID]?.image = image
+        panel?.previewView.card(for: artifactID)?.setMedia(image)
+    }
+
+    /// The editor saved this capture's draft: export the saved edits on drag.
+    func refreshFileDrag(for artifactID: String) {
+        precondition(Thread.isMainThread)
+        guard let artifact = resources[artifactID]?.artifact else { return }
+        prepareFileDrag(for: artifact)
     }
 
     private func prepareFileDrag(for artifact: CaptureArtifact) {

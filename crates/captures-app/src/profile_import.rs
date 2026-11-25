@@ -874,7 +874,8 @@ mod tests {
         )
         .unwrap();
         let report = fixture.import().unwrap();
-        assert_eq!(report.copied_files, 8);
+        // The fixture's draft includes its `render.png` for drags.
+        assert_eq!(report.copied_files, 9);
         assert!(report.copied_bytes > settings_before.len() as u64);
         assert_eq!(fs::read(&fixture.settings).unwrap(), settings_before);
         assert_eq!(

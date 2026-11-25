@@ -1636,6 +1636,15 @@ final class EditorLayerTable: NSTableView {
     }
 }
 
+/// The editor canvas, reporting every new image it shows: committed renders
+/// and in-progress drawing previews alike.
+final class EditorCanvasImageView: NSImageView {
+    var imageChanged: (NSImage?) -> Void = { _ in }
+    override var image: NSImage? {
+        didSet { if image !== oldValue { imageChanged(image) } }
+    }
+}
+
 final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                                         NSTableViewDelegate, NSTextFieldDelegate, NSTextViewDelegate {
     let window: NSWindow
@@ -1646,7 +1655,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let editorNumberFormatter: NumberFormatter
     private let outputIntegerFormatter: NumberFormatter
     private var tokens: Tokens
-    private let preview = NSImageView()
+    private let preview = EditorCanvasImageView()
     /// `.screenshot-canvas-surface`: a 1px `--border` ring and `--shadow-lg`.
     private let canvasSurface = NSView()
     private var canvasSurfaceShadowSize = NSSize.zero
@@ -2212,6 +2221,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     /// Called on the main thread whenever `presentArtifactIDs` changes.
     var presenceChanged: (Set<String>) -> Void = { _ in }
+    /// Called on the main thread with the canvas as shown, including drawing
+    /// previews, at most `canvasPublishInterval` apart, so the capture's mini
+    /// preview follows the edit live.
+    var canvasChanged: (String, NSImage) -> Void = { _, _ in }
+    /// Called on the main thread after a draft write for this capture, so its
+    /// mini preview drag exports the saved edits.
+    var draftSaved: (String) -> Void = { _ in }
+    static let canvasPublishInterval: TimeInterval = 1.0 / 30
+    private var pendingCanvas: (artifactID: String, image: NSImage)?
+
+    private func canvasShown(_ image: NSImage?) {
+        guard let image, let artifactID = state.artifactID else { return }
+        let scheduled = pendingCanvas != nil
+        pendingCanvas = (artifactID, image)
+        guard !scheduled else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.canvasPublishInterval) { [weak self] in
+            guard let self, let canvas = self.pendingCanvas else { return }
+            self.pendingCanvas = nil
+            self.canvasChanged(canvas.artifactID, canvas.image)
+        }
+    }
     /// Called on the main thread after a close finishes with nothing queued
     /// to reopen; the owner releases this controller and builds a new one on
     /// the next open.
@@ -3023,6 +3053,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         preview.frame = viewportInput.bounds
         preview.imageScaling = .scaleAxesIndependently
         preview.setAccessibilityLabel("Edited screenshot preview")
+        preview.imageChanged = { [weak self] image in self?.canvasShown(image) }
         canvasSurface.wantsLayer = true
         viewportInput.addSubview(canvasSurface)
         viewportInput.addSubview(preview)
@@ -7616,7 +7647,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // A running edit or inline text publishes (and re-arms) when it lands.
         guard !state.busy, inlineTextInput == nil, liveQueue.isEmpty else { armAutosave(); return }
         let serial = autosaveSerial, generation = state.generation
+        let artifactID = state.artifactID, draftSaved = draftSaved
         worker.autosaveDraft { [weak self] result in
+            if case .success = result, let artifactID { draftSaved(artifactID) }
             // A failed autosave stays quiet, as in shipping: the next edit or
             // the close flush retries.
             guard let self, case .success(let saved) = result, self.autosaveSerial == serial,
@@ -7631,7 +7664,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         autosaveWork?.cancel(); autosaveWork = nil
         autosaveSerial += 1
         guard pending || state.snapshot?.unsavedChanges == true else { return }
-        worker.autosaveDraft { _ in }
+        let artifactID = state.artifactID, draftSaved = draftSaved
+        worker.autosaveDraft { result in
+            if case .success = result, let artifactID { draftSaved(artifactID) }
+        }
     }
 
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,

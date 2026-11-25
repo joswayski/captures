@@ -401,6 +401,20 @@ pub fn delete_each(
 pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, Error> {
     encode_png_with_quality(image, CompressionType::Fast, FilterType::Sub)
 }
+/// A live image, such as an open editor's canvas, at the mini preview's
+/// thumbnail size, scaled with a fast area filter so it can follow every frame.
+#[must_use]
+pub fn live_thumbnail(image: &RgbaImage) -> RgbaImage {
+    if image.width() <= 568 && image.height() <= 320 {
+        return image.clone();
+    }
+    let scale = (568.0 / f64::from(image.width())).min(320.0 / f64::from(image.height()));
+    image::imageops::thumbnail(
+        image,
+        (f64::from(image.width()) * scale).round().max(1.0) as u32,
+        (f64::from(image.height()) * scale).round().max(1.0) as u32,
+    )
+}
 pub fn encode_thumbnail_png(image: &RgbaImage) -> Result<Vec<u8>, Error> {
     if image.width() > 568 || image.height() > 320 {
         let scale = (568.0 / f64::from(image.width())).min(320.0 / f64::from(image.height()));

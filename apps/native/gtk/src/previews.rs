@@ -19,7 +19,7 @@ use captures_history::HistoryEntry;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, graphene};
 
-use crate::history::{media_path, reveal};
+use crate::history::{drag_path, media_path, reveal};
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, Thumbnail, icon_button};
 
@@ -543,6 +543,20 @@ impl Previews {
         }
     }
 
+    /// An open screenshot editor's canvas for this capture: its card shows
+    /// the edit as it happens.
+    pub fn show_edited(&self, id: &str, texture: &gdk::Texture) {
+        if let Some(card) = self
+            .state
+            .cards
+            .borrow()
+            .iter()
+            .find(|card| card.entry.id == id)
+        {
+            card.image.set_texture(Some(texture.clone()));
+        }
+    }
+
     /// Shipping's `thumbnail-editor-active` ring follows the editor windows.
     pub fn sync_editing(&self) {
         self.state.sync_editing();
@@ -677,7 +691,7 @@ impl State {
         let (Some(surface), Some(device)) = (self.window.surface(), gesture.device()) else {
             return;
         };
-        let content = file_content(&media_path(&self.history_root, &card.entry));
+        let content = file_content(&drag_path(&self.history_root, &card.entry));
         // GTK's own drag source passes the pointer's offset from the press.
         let Some(drag) =
             gdk::Drag::begin(&surface, &device, &content, gdk::DragAction::COPY, dx, dy)
@@ -1216,12 +1230,12 @@ impl State {
         // press is a reorder instead (`reorder_cards`), which denies this.
         let drag = gtk::DragSource::new();
         drag.set_actions(gdk::DragAction::COPY);
-        let path = media_path(&self.history_root, &card.entry);
+        let (root, entry) = (self.history_root.clone(), card.entry.clone());
         let grab = Rc::new(Cell::new((0., 0.)));
         let at = grab.clone();
         drag.connect_prepare(move |_, x, y| {
             at.set((x, y));
-            Some(file_content(&path))
+            Some(file_content(&drag_path(&root, &entry)))
         });
         let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
         drag.connect_drag_begin(move |source, _| {

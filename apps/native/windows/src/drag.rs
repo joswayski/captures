@@ -68,9 +68,12 @@ pub fn prepare(root: &Path, id: &str) -> std::result::Result<Payload, String> {
         Ok(_) => return Err("unexpected response".into()),
         Err(error) => return Err(error.to_string()),
     };
-    let icon = captures_history::read_image(root, id, true)
-        .ok()
-        .and_then(|png| icon(&png));
+    // An editor draft's edits are what the file carries, so show them too.
+    let icon =
+        captures_history::editor_draft::render_path(&root.with_file_name("editor-drafts"), id)
+            .and_then(|render| std::fs::read(render).ok())
+            .or_else(|| captures_history::read_image(root, id, true).ok())
+            .and_then(|png| icon(&png));
     Ok(Payload { path, icon })
 }
 
