@@ -138,6 +138,14 @@ jobs:
               --screenshot "$RUNNER_TEMP/native-preferences/$appearance.png" --quit-after 4
             test -s "$RUNNER_TEMP/native-preferences/$appearance.png"
           done
+          for state in available highlights single downloading restarting error; do
+            apps/native/macos/.build/release/CapturesNative --scene update --update-state "$state" \
+              --appearance dark --screenshot "$RUNNER_TEMP/native-preferences/update-$state-dark.png" --quit-after 4
+            test -s "$RUNNER_TEMP/native-preferences/update-$state-dark.png"
+          done
+          apps/native/macos/.build/release/CapturesNative --scene update --update-state highlights \
+            --appearance light --screenshot "$RUNNER_TEMP/native-preferences/update-highlights-light.png" --quit-after 4
+          test -s "$RUNNER_TEMP/native-preferences/update-highlights-light.png"
           python3 - <<'PY'
           import os, sys
           from pathlib import Path
