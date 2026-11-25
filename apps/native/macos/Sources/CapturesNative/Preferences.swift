@@ -1644,6 +1644,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let previews = settings.bool("show_mini_previews")
         y = cornerPickerRow(y, card: card, enabled: previews)
         y = divider(y, card)
+        y = dragStyleRow(y, card: card, enabled: previews)
+        y = divider(y, card)
         let includePreviews = settings.bool("include_mini_previews_in_captures")
         let previewsCopy = PreferencesPolicy.row("include_mini_previews_in_captures")
         y = switchRow(["include_mini_previews_in_captures"], title: previewsCopy.title,
@@ -1706,6 +1708,56 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             size: tokens.number("text-sm"), muted: true, parent: picker)
         label.alignment = .right
         return layout.row.maxY
+    }
+
+    /// "When you drag a preview out": each style as a looping preview tile.
+    private func dragStyleRow(_ y: CGFloat, card: NSView, enabled: Bool) -> CGFloat {
+        var y = y
+        let copy = PreferencesPolicy.row("mini_preview_drag_style")
+        let copyBlock = copyHeight(copy.title, detail: copy.detail, width: contentWidth)
+        searchable.append((findBackground(NSRect(x: inset, y: y, width: contentWidth, height: copyBlock),
+            parent: card), "\(copy.title) \(copy.detail)"))
+        addCopy(copy.title, detail: copy.detail, x: inset, y: y, width: contentWidth, parent: card,
+            enabled: enabled)
+        y += copyBlock + tokens.number("s-4")
+        let metrics = captures_preview_drag_style_metrics_v1()
+        let styles = PreferencesPolicy.pairs("mini_preview_drag_styles")
+        let selected = settings.string("mini_preview_drag_style", "frosted")
+        let gap = tokens.number("s-3")
+        let width = min(CGFloat(metrics.demo_width) + 8,
+                        (contentWidth - gap * CGFloat(styles.count - 1)) / CGFloat(max(1, styles.count)))
+        let height = CGFloat(metrics.demo_height) + 4 + PreferenceDragStyleTile.labelHeight
+        let group = Surface(frame: NSRect(x: inset, y: y, width: contentWidth, height: height))
+        group.setAccessibilityElement(true)
+        group.setAccessibilityRole(.radioGroup); group.setAccessibilityLabel(copy.title)
+        group.alphaValue = enabled ? 1 : 0.55
+        card.addSubview(group)
+        var tiles: [PreferenceDragStyleTile] = []
+        for (index, style) in styles.enumerated() {
+            let value = style.value
+            let code: UInt32 = value == "dock" ? 1 : value == "well" ? 2 : 0
+            let frame = NSRect(x: CGFloat(index) * (width + gap), y: 0, width: width, height: height)
+            searchable.append((findBackground(frame.offsetBy(dx: inset, dy: y), parent: card), style.label))
+            let tile = PreferenceDragStyleTile(frame: frame, tokens: tokens, style: code, label: style.label) {
+                [weak self] in self?.set(value, for: "mini_preview_drag_style", rerender: true)
+            }
+            tile.active = selected == value
+            tile.isEnabled = enabled
+            tile.identifier = NSUserInterfaceItemIdentifier("mini-preview-drag-style.\(value)")
+            group.addSubview(tile); tiles.append(tile)
+        }
+        for (index, tile) in tiles.enumerated() {
+            // Arrow keys move the selection, and focus with it, like a radio group.
+            tile.step = { [weak self, weak group] delta in
+                guard let self, styles.indices.contains(index + delta) else { return }
+                let value = styles[index + delta].value
+                if let next = group?.subviews.first(where: {
+                    $0.identifier?.rawValue == "mini-preview-drag-style.\(value)"
+                }) { next.window?.makeFirstResponder(next) }
+                self.set(value, for: "mini_preview_drag_style", rerender: true)
+            }
+        }
+        return y + height
     }
 
     private func shortcutsCard(_ y: CGFloat) -> CGFloat {

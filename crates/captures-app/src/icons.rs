@@ -146,6 +146,8 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "M12 3L14.06 9.16L20.56 9.22L15.34 13.08L17.29 19.28L12 15.51L6.71 19.28L8.66 13.08L3.44 9.22L9.94 9.16Z",
         ],
         "arrow" => &["M4 20 20 4M12 4h8v8"],
+        // A mini preview's Quiet well while its file is dragged out.
+        "drag-out" => &[crate::preview_drag_style::GLYPH_PATH],
         "pen" => &["M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16"],
         "remove-bg" => &[
             "m14.8 20.5-7.4-7.4a2.4 2.4 0 0 1 0-3.4L13.2 4a2.4 2.4 0 0 1 3.4 0l3.4 3.4a2.4 2.4 0 0 1 0 3.4l-7.4 7.4a2.4 2.4 0 0 1-3.4 0Z",

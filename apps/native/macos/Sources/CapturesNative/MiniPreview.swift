@@ -9,6 +9,23 @@ struct MiniPreviewSettings: Equatable {
     let enabled: Bool
     let placement: String
     let includeInCaptures: Bool
+    /// `mini_preview_drag_style`: what a card's slot shows while its file is
+    /// dragged out (`frosted`, `dock` or `well`).
+    var dragStyle = "frosted"
+
+    /// The style's ABI number (`captures_preview_drag_out_new_v1`).
+    var dragStyleCode: UInt32 {
+        switch dragStyle {
+        case "dock": 1
+        case "well": 2
+        default: 0
+        }
+    }
+
+    /// The same stack, whatever the drag style: a style change needs no rebuild.
+    func sameStack(as other: MiniPreviewSettings) -> Bool {
+        enabled == other.enabled && placement == other.placement && includeInCaptures == other.includeInCaptures
+    }
 }
 
 private final class MiniPreviewImageView: NSView {
@@ -772,6 +789,26 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private(set) var dropRejectedAt: CFTimeInterval?
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
+    /// A file drag of this card began (`MiniPreviewController.beginDragOut`).
+    var dragBegan: (() -> Void)?
+    /// How the slot shows while the file is out (`preview_drag_style`), or
+    /// nil at rest.
+    private(set) var dragPose: CapturesPreviewDragPose?
+    private var dragOverlay: MiniPreviewDragOverlay?
+    /// Carried up or down the stack: no hover chrome, raised, `lift` 0…1.
+    var carrying = false { didSet { if carrying != oldValue { refreshChrome() } } }
+    private var reorderLift: CGFloat = 0
+    /// The press's gesture: undecided, reordering the stack, or settled
+    /// (a file drag, or nothing more this press).
+    private enum Gesture { case none, pressed, reorder, done }
+    private var gesture = Gesture.none
+    /// The stack's reorder: begin (false when it can't reorder now), move
+    /// (points down from the press, pointer in window; true when the pointer
+    /// left the stack and the gesture becomes a file drag), end (cancelled).
+    var reorderBegan: () -> Bool = { false }
+    var reorderMoved: (CGFloat, NSPoint) -> Bool = { _, _ in false }
+    var reorderEnded: (Bool) -> Void = { _ in }
+    var stackCount: () -> Int = { 1 }
     var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !sizeLabel.isHidden || !status.isHidden }
@@ -1250,13 +1287,16 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     fileprivate func resetForReuse() {
         layer?.removeAnimation(forKey: "preview-settle-position")
         pointerInside = false
+        carrying = false; setReorderLift(0); gesture = .none
         refreshChrome()
     }
 
     /// Pointer hover (once unlocked) or key-window focus within keeps chrome up.
     fileprivate func refreshChrome() {
         guard !isExiting else { return }
-        setChromeVisible((pointerInside && !isHoverLocked()) || hasKeyFocusWithin)
+        // A card carried up the stack or out of it shows no chrome.
+        let away = dragPose != nil || carrying || fileDragStarted
+        setChromeVisible(!away && ((pointerInside && !isHoverLocked()) || hasKeyFocusWithin))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -1496,34 +1536,141 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     override func mouseDown(with event: NSEvent) {
         press = event.locationInWindow
+        gesture = .pressed
         setFileDragging(false)
         // Shipping `grabbing` while the card is held; the drag session's own
         // cursor takes over once the file leaves the card.
         if isOutboundFileDragEnabled { NSCursor.closedHand.set() }
     }
 
+    /// A mostly vertical press in an expanded stack reorders it; anything
+    /// else, or a reorder whose pointer leaves the stack, drags the file out.
     override func mouseDragged(with event: NSEvent) {
-        guard isOutboundFileDragEnabled, !fileDragStarted, let press, let path = preparedDragPath,
-              hypot(event.locationInWindow.x - press.x, event.locationInWindow.y - press.y) >= 4,
-              imageView.image.size.width > 0, imageView.image.size.height > 0 else { return }
+        guard !fileDragStarted, let press else { return }
+        let dx = event.locationInWindow.x - press.x
+        let dy = press.y - event.locationInWindow.y
+        switch gesture {
+        case .reorder:
+            guard reorderMoved(dy, event.locationInWindow) else { return }
+            gesture = .done
+            reorderEnded(true)
+            _ = beginFileDrag(event)
+        case .pressed:
+            switch captures_preview_press_intent_v1(Double(dx), Double(dy), stackCount()) {
+            case 0: return
+            case 1 where !compact && reorderBegan():
+                gesture = .reorder
+                _ = reorderMoved(dy, event.locationInWindow)
+            default:
+                // An export still being prepared starts the drag on a later step.
+                if beginFileDrag(event) { gesture = .done }
+            }
+        case .none, .done: return
+        }
+    }
+
+    private func beginFileDrag(_ event: NSEvent) -> Bool {
+        guard isOutboundFileDragEnabled, !fileDragStarted, let path = preparedDragPath,
+              imageView.image.size.width > 0, imageView.image.size.height > 0 else { return false }
         setFileDragging(true)
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
         item.setDraggingFrame(mediaClip.frame, contents: imageView.image)
         HotKeysDuringDrags.began(beginDraggingSession(with: [item], event: event, source: self))
+        dragBegan?()
+        return true
     }
 
     override func mouseUp(with event: NSEvent) {
+        if gesture == .reorder { reorderEnded(false) }
+        gesture = .none
         press = nil
         if isOutboundFileDragEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) {
             NSCursor.openHand.set()
         }
     }
 
-    /// Shipping `.thumbnail-file-dragging` conceals the source beneath the ghost.
+    /// A file drag of this card is running. How its slot looks meanwhile
+    /// is the drag style's pose (`applyDragPose`).
     func setFileDragging(_ active: Bool) {
         fileDragStarted = active
-        mediaClip.isHidden = active
-        layer?.backgroundColor = active ? NSColor.clear.cgColor : tokens.color("glass-strong").cgColor
+        refreshChrome()
+    }
+
+    static let restPose = CapturesPreviewDragPose(opacity: 1, scale: 1, media_blur: 0, media_opacity: 1,
+        media_scale: 1, fill_opacity: 1, chrome_opacity: 1, hairline: 0, well: 0, glyph: 0,
+        glyph_scale: 1, slot: 1)
+
+    /// Show the slot in a drag style's `pose` while its file is out, or at
+    /// rest (nil). Every part fades with its own multiplier, so a style
+    /// changes smoothly in and out at 60 Hz without rebuilding anything.
+    func applyDragPose(_ pose: CapturesPreviewDragPose?) {
+        let wasPosed = dragPose != nil
+        guard pose != nil || wasPosed, let layer else { return }
+        dragPose = pose
+        let p = pose ?? Self.restPose
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        if pose != nil {
+            // An arrival still playing animates the card's opacity, and a
+            // hover leaving animates the media; either would override the pose.
+            layer.removeAnimation(forKey: NativeMotion.animationKey)
+            imageView.layer?.removeAnimation(forKey: "preview-media-blur")
+            imageView.layer?.removeAnimation(forKey: "frame")
+            imageView.layer?.removeAnimation(forKey: "bounds")
+            imageView.layer?.removeAnimation(forKey: "position")
+        }
+        alphaValue = CGFloat(p.opacity)
+        updateTransform(scale: CGFloat(p.scale))
+        imageView.alphaValue = CGFloat(p.media_opacity)
+        let blur = pose == nil ? mediaBlurRadius : p.media_blur
+        imageView.layer?.setValue(blur, forKeyPath: "filters.blur.inputRadius")
+        if pose != nil || !mediaHovered {
+            let s = CGFloat(p.media_scale), b = mediaClip.bounds
+            imageView.frame = NSRect(x: b.width * (1 - s) / 2, y: b.height * (1 - s) / 2,
+                                     width: b.width * s, height: b.height * s)
+        }
+        let chrome = CGFloat(p.chrome_opacity)
+        layer.backgroundColor = tokens.color("glass-strong")
+            .withAlphaComponent(tokens.color("glass-strong").alphaComponent * CGFloat(p.fill_opacity)).cgColor
+        layer.borderColor = tokens.color("glass-border")
+            .withAlphaComponent(tokens.color("glass-border").alphaComponent * chrome).cgColor
+        for shadow in layer.sublayers ?? [] where shadow.name == BoxShadowLayers.layerName {
+            shadow.opacity = Float(chrome)
+        }
+        for view in [sizeLabel, warningLabel, status, clipboardChip] as [NSView] { view.alphaValue = chrome }
+        editButton?.alphaValue = chrome
+        let ring: CGFloat = !compact && editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) ? 1 : 0
+        editorRing.opacity = Float(ring * chrome)
+        if pose != nil, dragOverlay == nil {
+            let overlay = MiniPreviewDragOverlay(tokens: tokens, bounds: bounds,
+                                                 radius: tokens.number("thumbnail-card-radius"))
+            layer.addSublayer(overlay); dragOverlay = overlay
+        }
+        dragOverlay?.apply(p)
+        if pose == nil { dragOverlay?.removeFromSuperlayer(); dragOverlay = nil }
+        CATransaction.commit()
+        if pose == nil { refreshChrome() }
+    }
+
+    /// The carried card's lift while the stack is reordered (0…1).
+    func setReorderLift(_ lift: CGFloat) {
+        guard lift != reorderLift, let layer else { return }
+        reorderLift = lift
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        updateTransform(scale: CGFloat(dragPose?.scale ?? 1))
+        // A raised shadow under the lifted card.
+        layer.shadowPath = BoxShadowLayers.roundedPath(bounds, radius: tokens.number("thumbnail-card-radius"))
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowRadius = 18; layer.shadowOffset = .zero
+        layer.shadowOpacity = Float(0.32 * lift)
+        layer.zPosition = lift > 0 || carrying ? 1 : 0
+        CATransaction.commit()
+    }
+
+    private func updateTransform(scale: CGFloat) {
+        guard let layer else { return }
+        let metrics = captures_preview_drag_style_metrics_v1()
+        let lift = 1 + (CGFloat(metrics.reorder_lift_scale) - 1) * reorderLift
+        layer.transform = centredScale(scale * lift, of: layer)
     }
 
     func draggingSession(_ session: NSDraggingSession,
@@ -1809,6 +1956,17 @@ final class MiniPreviewView: NSView {
     }
     var stackToolbarButtons: [MiniPreviewButton] { [clearButton, collapseButton].compactMap { $0 } }
     private(set) var artifactIDs: [String] = []
+    /// A card carried up or down the stack (`captures_preview_reorder_*`).
+    private var reorder: (handle: OpaquePointer, id: String)?
+    private var reorderOffsets: [String: CGFloat] = [:]
+    /// The card whose file is out and its drag style's pose.
+    private(set) var dragOut: (id: String, pose: CapturesPreviewDragPose)?
+    /// Cards sit off their rest slots (a reorder or a closing slot).
+    private var transientLayout = false
+    private var reorderTimer: Timer?
+    /// A reorder settled with the card at a new position: commit it.
+    var reorderCommitted: (String, Int) -> Void = { _, _ in }
+    var isReordering: Bool { reorder != nil }
     var renderedArtifactIDs: [String] { artifactIDs.filter { cards[$0] != nil } }
     var cardPaintOrder: [String] {
         document.subviews.compactMap { ($0 as? MiniPreviewCardView)?.artifactID }
@@ -1893,6 +2051,10 @@ final class MiniPreviewView: NSView {
             card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
             card.isHoverLocked = { [weak self] in self?.hoverLock.locked == true }
+            card.stackCount = { [weak self] in self?.artifactIDs.count ?? 1 }
+            card.reorderBegan = { [weak self] in self?.beginReorder(id) ?? false }
+            card.reorderMoved = { [weak self] dy, point in self?.moveReorder(dy, pointer: point) ?? false }
+            card.reorderEnded = { [weak self] cancel in self?.endReorder(cancel: cancel) }
             for button in card.iconButtons {
                 button.tooltipChanged = { [weak self] owner, visible in
                     self?.setTooltip(for: owner, visible: visible)
@@ -2139,6 +2301,10 @@ final class MiniPreviewView: NSView {
                 else { destination.removeAnimation(forKey: "preview-settle-position") }
             }
             card.isHoverLocked = { [weak self] in self?.hoverLock.locked == true }
+            card.stackCount = { [weak self] in self?.artifactIDs.count ?? 1 }
+            card.reorderBegan = { [weak self] in self?.beginReorder(id) ?? false }
+            card.reorderMoved = { [weak self] dy, point in self?.moveReorder(dy, pointer: point) ?? false }
+            card.reorderEnded = { [weak self] cancel in self?.endReorder(cancel: cancel) }
             for button in card.iconButtons {
                 button.tooltipChanged = { [weak self] owner, visible in
                     self?.setTooltip(for: owner, visible: visible)
@@ -2602,6 +2768,113 @@ final class MiniPreviewView: NSView {
 
     func setFileDragging(_ active: Bool, for artifactID: String) { cards[artifactID]?.setFileDragging(active) }
 
+    func setDragBegan(_ callback: @escaping (String) -> Void) {
+        for (id, card) in cards { card.dragBegan = { callback(id) } }
+    }
+
+    /// The card whose file is out shows its drag style's `pose`; cards
+    /// older than it follow its slot as it closes toward the anchored edge.
+    func setDragOut(_ id: String, pose: CapturesPreviewDragPose) {
+        dragOut = (id, pose)
+        cards[id]?.applyDragPose(pose)
+        layoutTransient()
+    }
+
+    func clearDragOut(_ id: String) {
+        guard dragOut?.id == id else { return }
+        dragOut = nil
+        cards[id]?.applyDragPose(nil)
+        layoutTransient()
+    }
+
+    private static var nowMs: Double { CACurrentMediaTime() * 1000 }
+
+    private func beginReorder(_ id: String) -> Bool {
+        guard !stackCollapsed, reorder == nil, dragOut == nil, exitingArtifactIDs.isEmpty,
+              artifactIDs.count >= 2, let from = artifactIDs.firstIndex(of: id), let card = cards[id],
+              let handle = captures_preview_reorder_new_v1(artifactIDs.count, from, anchoredAtTop,
+                                                           Self.nowMs, NativeMotion.reduceMotion)
+        else { return false }
+        reorder = (handle, id)
+        if let owner = tooltipOwner { setTooltip(for: owner, visible: false) }
+        card.carrying = true
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tickReorder() }
+        RunLoop.main.add(timer, forMode: .common)
+        reorderTimer = timer
+        return true
+    }
+
+    /// Returns whether the pointer left the stack, so the press becomes a
+    /// file drag.
+    private func moveReorder(_ dy: CGFloat, pointer: NSPoint) -> Bool {
+        guard let reorder, let card = cards[reorder.id] else { return false }
+        captures_preview_reorder_pointer_v1(reorder.handle, Double(dy))
+        tickReorder()
+        let point = document.convert(pointer, from: nil)
+        let tops = artifactIDs.compactMap { restLayouts[$0].map { CGFloat($0.y) } }
+        guard let first = tops.min(), let last = tops.max() else { return false }
+        let outside = max(0, card.frame.minX - point.x, point.x - card.frame.maxX)
+        let beyond = max(first - point.y, point.y - (last + card.frame.height))
+        return captures_preview_reorder_escapes_v1(Double(outside), Double(beyond))
+    }
+
+    private func endReorder(cancel: Bool) {
+        guard let reorder else { return }
+        captures_preview_reorder_release_v1(reorder.handle, cancel, Self.nowMs)
+        tickReorder()
+    }
+
+    private func tickReorder() {
+        guard let current = reorder else { return }
+        var offsets = [Double](repeating: 0, count: artifactIDs.count)
+        var lift = 0.0, from = 0, to = 0
+        let settled = captures_preview_reorder_frame_v1(current.handle, Self.nowMs, &offsets, offsets.count,
+                                                        &lift, &from, &to)
+        for (index, id) in artifactIDs.enumerated() { reorderOffsets[id] = CGFloat(offsets[index]) }
+        cards[current.id]?.setReorderLift(CGFloat(lift))
+        guard settled else { layoutTransient(); return }
+        stopReorder()
+        // The cards already sit in their new slots, where the rebuilt stack
+        // lays them out without offsets.
+        if from != to { reorderCommitted(current.id, to) } else { layoutTransient() }
+    }
+
+    private func stopReorder() {
+        guard let current = reorder else { return }
+        reorderTimer?.invalidate(); reorderTimer = nil
+        captures_preview_reorder_free_v1(current.handle)
+        reorder = nil
+        reorderOffsets.removeAll()
+        if let card = cards[current.id] { card.carrying = false; card.setReorderLift(0) }
+    }
+
+    /// The stack is being replaced: drop a reorder in progress.
+    func cancelTransients() {
+        stopReorder()
+        layoutTransient()
+    }
+
+    /// Place cards off their rest slots for a reorder or a closing slot,
+    /// and back on them once neither runs.
+    private func layoutTransient() {
+        guard !stackCollapsed else { return }
+        let active = reorder != nil || dragOut != nil
+        guard active || transientLayout else { return }
+        transientLayout = active
+        let dragIndex = dragOut.flatMap { artifactIDs.firstIndex(of: $0.id) }
+        let shift = dragOut.map { CGFloat(captures_preview_closing_shift_v1($0.pose.slot, anchoredAtTop)) } ?? 0
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        for (index, id) in artifactIDs.enumerated() where !exitingArtifactIDs.contains(id) {
+            guard let card = cards[id], let rest = restLayouts[id] else { continue }
+            var y = CGFloat(rest.y) + (reorderOffsets[id] ?? 0)
+            if let dragIndex, index < dragIndex { y += shift }
+            guard card.frame.minY != y else { continue }
+            card.layer?.removeAnimation(forKey: "preview-settle-position")
+            card.setFrameOrigin(NSPoint(x: card.frame.minX, y: y))
+        }
+        CATransaction.commit()
+    }
+
     func continueFileDrags(from previous: MiniPreviewView) {
         for (id, card) in cards where previous.cards[id]?.fileDragStarted == true
             && generations[id] == previous.generations[id] {
@@ -2960,6 +3233,8 @@ final class MiniPreviewController {
     private var cardGenerations: [String: Int] = [:]
     private var busyActions: [String: Int] = [:]
     private var preparedDrags: [String: (imagePath: String, previewPath: String, path: String)] = [:]
+    /// The card whose file is out, playing its drag style until it settles.
+    private var dragOut: MiniPreviewDragOut?
     private var visibilityPendingArtifactID: String?
     private var nextDecodeToken = 0
     /// The capture this app last copied, valid until the pasteboard changes.
@@ -3239,7 +3514,10 @@ final class MiniPreviewController {
     func updateSettings(_ settings: MiniPreviewSettings) {
         precondition(Thread.isMainThread)
         if !settings.enabled || self.settings.placement != settings.placement { stackOrigin = nil }
+        // A new drag style alone applies to the next drag; the stack stays put.
+        let styleOnly = self.settings.dragStyle != settings.dragStyle && self.settings.sameStack(as: settings)
         self.settings = settings
+        guard !styleOnly else { return }
         if !settings.enabled, stack.isCollapsed { stack.setCollapsed(false) }
         if !stack.ids.isEmpty { makePanel() }
         updateVisibility()
@@ -3496,8 +3774,49 @@ final class MiniPreviewController {
         return frames
     }
 
+    /// A card's file drag began: its slot plays the chosen drag style.
+    private func beginDragOut(_ artifactID: String) {
+        dragOut?.finish()
+        let generation = cardGenerations[artifactID]
+        let drag = MiniPreviewDragOut(artifactID: artifactID, style: settings.dragStyleCode,
+                                      reducedMotion: NativeMotion.reduceMotion)
+        drag.apply = { [weak self] pose in
+            guard let self, self.cardGenerations[artifactID] == generation else { return }
+            self.panel?.previewView.setDragOut(artifactID, pose: pose)
+        }
+        drag.completed = { [weak self, weak drag] dropped in
+            guard let self else { return }
+            if self.dragOut === drag { self.dragOut = nil }
+            // An accepted drop: the imprint faded and its slot closed, so the
+            // rebuilt stack takes the same positions.
+            if dropped, self.cardGenerations[artifactID] == generation, self.stack.ids.contains(artifactID) {
+                self.dismiss(artifactID, exit: nil)
+            } else {
+                self.panel?.previewView.clearDragOut(artifactID)
+            }
+        }
+        dragOut = drag
+        drag.start()
+    }
+
+    /// Returns whether this card's drag style was playing.
+    @discardableResult
+    private func endDragOut(_ artifactID: String, dropped: Bool) -> Bool {
+        guard let drag = dragOut, drag.artifactID == artifactID else { return false }
+        drag.end(dropped: dropped)
+        return true
+    }
+
+    /// A card carried within the stack settled at chronological `index`.
+    private func commitReorder(_ artifactID: String, to index: Int) {
+        guard stack.move(artifactID, to: index) else { return }
+        makePanel(reusingCards: true)
+        updateVisibility()
+    }
+
     func close() {
         precondition(Thread.isMainThread)
+        dragOut?.cancel(); dragOut = nil
         viewTransition?.cancel(); viewTransition = nil
         _ = policy.stopWaiting(); visibilityPendingArtifactID = nil; screenID = nil
         stackOrigin = nil
@@ -3583,6 +3902,7 @@ final class MiniPreviewController {
             // the new panel's coordinates.
             if view.isCardHoverLocked { next.previewView.lockCardHover() }
         }
+        previous?.previewView.cancelTransients()
         previous?.close()
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         for id in liveIDs {
@@ -3591,16 +3911,25 @@ final class MiniPreviewController {
                   prepared.previewPath == artifact.previewPath else { continue }
             next.previewView.setPreparedDragPath(prepared.path, for: id)
         }
+        next.previewView.setDragBegan { [weak self] id in self?.beginDragOut(id) }
+        next.previewView.reorderCommitted = { [weak self] id, index in self?.commitReorder(id, to: index) }
         next.previewView.setDragEnded { [weak self] id, point, operation in
-            guard let self, let source = sourceArtifacts[id], self.contains(source),
-                  self.cardGenerations[id] == sourceGenerations[id] else { return }
+            guard let self else { return }
+            guard let source = sourceArtifacts[id], self.contains(source),
+                  self.cardGenerations[id] == sourceGenerations[id] else {
+                self.endDragOut(id, dropped: false); return
+            }
             self.panel?.previewView.setFileDragging(false, for: id)
             if self.panel?.frame.contains(point) == true {
+                self.endDragOut(id, dropped: false)
                 self.panel?.previewView.rejectDrop(for: id)
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
                 $0 !== self.panel && $0.isVisible && $0.frame.contains(point)
             }) {
-                self.dismiss(id, exit: nil)
+                // The slot closes before the card leaves the stack.
+                if !self.endDragOut(id, dropped: true) { self.dismiss(id, exit: nil) }
+            } else {
+                self.endDragOut(id, dropped: false)
             }
         }
         panel = next

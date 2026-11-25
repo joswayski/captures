@@ -27,6 +27,7 @@ struct CapturePreferences {
     let autoStart: Bool
     let showMiniPreviews: Bool
     let miniPreviewPlacement: String
+    var miniPreviewDragStyle = "frosted"
     let includeMiniPreviewsInCaptures: Bool
     let includeRecordingControlsInCaptures: Bool
     /// Saved New Capture shortcut (blank means the default), for notices.
@@ -52,6 +53,7 @@ struct CapturePreferences {
         self.freezeScreen = freezeScreen; self.autoStart = autoStart
         self.showMiniPreviews = showMiniPreviews; self.miniPreviewPlacement = miniPreviewPlacement
         self.includeMiniPreviewsInCaptures = includeMiniPreviewsInCaptures
+        miniPreviewDragStyle = settings["mini_preview_drag_style"] as? String ?? "frosted"
         includeRecordingControlsInCaptures = settings["include_recording_controls_in_captures"] as? Bool ?? false
         newCaptureShortcut = settings["new_capture_shortcut"] as? String ?? ""
         recording = try RecordingPreferences(settings["recording"] as? [String: Any] ?? [:])
@@ -71,7 +73,7 @@ struct CapturePreferences {
 
     var miniPreviewSettings: MiniPreviewSettings {
         MiniPreviewSettings(enabled: showMiniPreviews, placement: miniPreviewPlacement,
-                            includeInCaptures: includeMiniPreviewsInCaptures)
+                            includeInCaptures: includeMiniPreviewsInCaptures, dragStyle: miniPreviewDragStyle)
     }
 
     static func load(path: String?, transport: SettingsTransport = SettingsBridge()) throws -> Self {

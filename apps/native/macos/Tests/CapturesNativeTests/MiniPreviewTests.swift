@@ -830,8 +830,11 @@ final class MiniPreviewTests: XCTestCase {
         }
     }
 
-    func testFileDragConcealsOnlySourceMediaAndRestoresRebuiltSurvivor() throws {
+    func testFileDragShowsFrostedImprintAndRestoresRebuiltSurvivor() throws {
         _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
         let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
         defer { controller.close() }
         func panel() throws -> MiniPreviewPanel {
@@ -841,33 +844,162 @@ final class MiniPreviewTests: XCTestCase {
         func mediaPixel(_ panel: MiniPreviewPanel) throws -> NSColor {
             let card = try XCTUnwrap(panel.previewView.card(for: "source"))
             let point = card.convert(NSPoint(x: 30, y: 70), to: panel.previewView)
-            return try XCTUnwrap(pixelColor(in: render(panel), of: panel, x: point.x, y: point.y))
+            return try XCTUnwrap(pixelColor(in: XCTUnwrap(renderPresentation(panel)), of: panel,
+                                            x: point.x, y: point.y))
         }
         let original = try panel()
         let source = try XCTUnwrap(original.previewView.card(for: "source"))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
         let visible = try mediaPixel(original)
+        XCTAssertGreaterThan(visible.alphaComponent, 0.99)
         source.setFileDragging(true)
-        let concealed = try mediaPixel(original)
-        XCTAssertNotEqual(concealed, visible, "the capture does not paint under its OS drag ghost")
-        XCTAssertLessThan(concealed.alphaComponent, 0.01, "shipping leaves the source media area transparent")
-        XCTAssertTrue(source.hasVisibleLabels, "concealing media retains its metadata")
-        try write(render(original), name: "mini-preview-file-drag-source-hidden.png")
-        controller.setEditorArtifacts(["source"])
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
-        let glowing = try XCTUnwrap(renderPresentation(original))
-        let inside = source.convert(NSPoint(x: 4, y: 70), to: original.previewView)
-        XCTAssertLessThan(try XCTUnwrap(pixelColor(in: glowing, of: original,
-            x: inside.x, y: inside.y)).alphaComponent, 0.01,
-            "the editor glow stays outside the concealed source, like CSS box-shadow")
-        try write(glowing, name: "mini-preview-file-drag-editor-glow.png")
-        controller.setEditorArtifacts([])
+        source.dragBegan?()
+        try waitUntil { (source.dragPose?.media_blur ?? 0) > 13.9 }
+        let frosted = try mediaPixel(original)
+        // Frosted imprint: the card's glass and chrome leave; the capture
+        // stays as a faint, blurred imprint at half strength.
+        XCTAssertLessThan(frosted.alphaComponent, 0.8, "the card does not paint under its OS drag image")
+        XCTAssertGreaterThan(frosted.alphaComponent, 0.15, "the slot keeps a faint imprint of the capture")
+        XCTAssertFalse(original.previewView.visibleCardActionTitles.contains("Copy"), "no buttons while away")
+        if let bitmap = try renderPresentation(original) { try write(bitmap, name: "mini-preview-drag-frosted.png") }
         controller.updateSettings(previewSettings())
         let rebuilt = try panel()
-        XCTAssertEqual(try mediaPixel(rebuilt), concealed, "settings must not reintroduce the source media")
+        XCTAssertFalse(rebuilt === original, "identical settings still rebuild the stack")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(try mediaPixel(rebuilt).alphaComponent, frosted.alphaComponent, accuracy: 0.08,
+                       "a rebuild keeps the imprint instead of flashing the card back")
         source.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
-        XCTAssertEqual(try mediaPixel(rebuilt), visible, "the original source completion restores its survivor")
+        let survivor = try XCTUnwrap(rebuilt.previewView.card(for: "source"))
+        try waitUntil { survivor.dragPose == nil }
+        XCTAssertGreaterThan(try mediaPixel(rebuilt).alphaComponent, 0.99, "a cancelled drag re-forms the card")
         XCTAssertEqual(controller.presentedArtifactIDs, ["source"])
-        try write(render(rebuilt), name: "mini-preview-file-drag-source-restored.png")
+    }
+
+    /// Two cards, oldest first, in an expanded stack at `placement`.
+    private func twoCardController(placement: String, style: String = "frosted") throws -> MiniPreviewController {
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { path in
+            self.solidImage((path as NSString).lastPathComponent == "older.png" ? .systemOrange : .systemBlue)
+        })
+        var settings = MiniPreviewSettings(enabled: true, placement: placement, includeInCaptures: false)
+        settings.dragStyle = style
+        for id in ["older", "newer"] {
+            let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+            controller.present(artifact(id: id, previewPath: "/\(id).png"), on: screenID(),
+                               settings: settings, generation: generation)
+            try waitUntil { controller.decodedArtifactIDs.contains(id) && controller.isPanelVisible }
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        return controller
+    }
+
+    private func screenFrame(_ card: MiniPreviewCardView) throws -> NSRect {
+        let window = try XCTUnwrap(card.window)
+        let layer = try XCTUnwrap(card.layer)
+        // What paints: a settle still running moves the presentation, not the frame.
+        let presented = (layer.presentation() ?? layer).frame
+        let inView = card.superview.map { $0.convert(presented, to: nil) } ?? presented
+        return window.convertToScreen(inView)
+    }
+
+    func testAcceptedDropClosesTheSlotTowardTheAnchorBeforeTheCardLeaves() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        for placement in ["bottom_right", "top_right"] {
+            for style in ["frosted", "dock", "well"] {
+                let controller = try twoCardController(placement: placement, style: style)
+                defer { controller.close() }
+                let view = try XCTUnwrap(controller.previewView)
+                let newer = try XCTUnwrap(view.card(for: "newer"))
+                let older = try XCTUnwrap(view.card(for: "older"))
+                let start = try screenFrame(older), pitch = abs(try screenFrame(newer).minY - start.minY)
+                XCTAssertGreaterThan(pitch, 40, "\(placement): the two cards have separate slots")
+                newer.setFileDragging(true)
+                newer.dragBegan?()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                if let bitmap = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel)) {
+                    try write(bitmap, name: "mini-preview-drag-\(style)-\(placement).png")
+                }
+                newer.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
+                XCTAssertEqual(controller.presentedArtifactIDs, ["older", "newer"],
+                               "\(style) \(placement): the card stays until its slot has closed")
+                // Follow the older card frame by frame across the rebuild.
+                var last = try screenFrame(older).minY
+                var largestStep: CGFloat = 0
+                let deadline = Date().addingTimeInterval(3)
+                while controller.presentedArtifactIDs.count == 2 && Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 120))
+                    guard let card = controller.previewView?.card(for: "older") else { continue }
+                    let y = try screenFrame(card).minY
+                    largestStep = max(largestStep, abs(y - last)); last = y
+                }
+                XCTAssertEqual(controller.presentedArtifactIDs, ["older"])
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                let settled = try screenFrame(try XCTUnwrap(controller.previewView?.card(for: "older"))).minY
+                largestStep = max(largestStep, abs(settled - last))
+                // A snap moves a whole slot in one frame; a busy machine's
+                // dropped frames move well under that.
+                XCTAssertLessThan(largestStep, pitch * 0.6,
+                                  "\(style) \(placement): the older card glides into the slot, it never snaps")
+                // AppKit screen y grows upward: bottom stacks close downward, top stacks upward.
+                let moved = settled - start.minY
+                XCTAssertEqual(abs(moved), pitch, accuracy: 2, "\(style) \(placement): it takes the closed slot")
+                XCTAssertEqual(moved < 0, placement.hasPrefix("bottom"),
+                               "\(style) \(placement): the slot closes toward the anchored edge")
+            }
+        }
+    }
+
+    func testDraggingACardWithinTheStackReordersIt() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        for placement in ["bottom_right", "top_right"] {
+            let controller = try twoCardController(placement: placement)
+            defer { controller.close() }
+            let view = try XCTUnwrap(controller.previewView)
+            let newer = try XCTUnwrap(view.card(for: "newer"))
+            let older = try XCTUnwrap(view.card(for: "older"))
+            // Window coordinates grow upward; the gesture's dy grows downward.
+            let travel = older.frame.midY - newer.frame.midY
+            let press = newer.convert(NSPoint(x: newer.bounds.midX, y: newer.bounds.midY), to: nil)
+            XCTAssertTrue(newer.reorderBegan(), "\(placement): a vertical press in an expanded stack reorders")
+            XCTAssertTrue(newer.carrying)
+            for step in 1...12 {
+                let dy = -travel * CGFloat(step) / 12
+                XCTAssertFalse(newer.reorderMoved(dy, NSPoint(x: press.x, y: press.y - dy)),
+                               "\(placement): moving within the stack stays a reorder")
+                RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 60))
+            }
+            if let bitmap = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel)) {
+                try write(bitmap, name: "mini-preview-reorder-\(placement).png")
+            }
+            newer.reorderEnded(false)
+            try waitUntil { controller.presentedArtifactIDs == ["newer", "older"] }
+            XCTAssertFalse(try XCTUnwrap(controller.previewView?.card(for: "newer")).carrying)
+            // Leaving the stack sideways hands the press to the OS file drag.
+            let card = try XCTUnwrap(controller.previewView?.card(for: "older"))
+            XCTAssertTrue(card.reorderBegan())
+            let outside = card.convert(NSPoint(x: card.bounds.maxX + 400, y: card.bounds.midY), to: nil)
+            XCTAssertTrue(card.reorderMoved(0, outside),
+                          "\(placement): a reorder that leaves the stack becomes a file drag")
+            card.reorderEnded(true)
+            try waitUntil { !card.carrying }
+            XCTAssertEqual(controller.presentedArtifactIDs, ["newer", "older"], "a cancelled reorder keeps the order")
+        }
+    }
+
+    func testChangingOnlyTheDragStyleKeepsTheStack() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "shown", previewPath: "/shown.png"))
+        defer { controller.close() }
+        let view = try XCTUnwrap(controller.previewView)
+        var settings = previewSettings()
+        settings.dragStyle = "well"
+        controller.updateSettings(settings)
+        XCTAssertTrue(controller.previewView === view, "a drag style change must not rebuild the panel")
     }
 
     func testSelfDropSurvivesSettingsRebuildWithoutReplayingItsShake() throws {

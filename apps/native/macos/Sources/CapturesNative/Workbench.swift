@@ -2057,7 +2057,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 // saving). Rebuilding the panel for unrelated settings made
                 // presented mini previews jump, so only rebuild on a real change.
                 let next = MiniPreviewSettings(enabled: enabled, placement: placement,
-                    includeInCaptures: include)
+                    includeInCaptures: include,
+                    dragStyle: settings["mini_preview_drag_style"] as? String ?? "frosted")
                 guard let previews = self?.miniPreviews, previews.settings != next else { return }
                 previews.updateSettings(next)
             }, settingsPersisted: { [weak self] settings in

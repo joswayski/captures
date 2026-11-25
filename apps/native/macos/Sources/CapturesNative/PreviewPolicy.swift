@@ -36,6 +36,14 @@ final class NativePreviewStack {
         return id.withCString { captures_preview_stack_remove_v1(handle, $0) }
     }
 
+    /// Move a card to chronological `index` (clamped), as a reorder does.
+    @discardableResult
+    func move(_ id: String, to index: Int) -> Bool {
+        precondition(Thread.isMainThread)
+        guard !id.utf8.contains(0), index >= 0 else { return false }
+        return id.withCString { captures_preview_stack_move_v1(handle, $0, index) }
+    }
+
     /// Put a removed card back at `index` (clamped), as a failed exit action does.
     @discardableResult
     func restore(_ id: String, at index: Int) -> Bool {
