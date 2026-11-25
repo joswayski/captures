@@ -20,7 +20,7 @@ use crate::{
 };
 
 use self::ffi::{
-    kEventClassKeyboard, kEventHotKeyPressed, kEventHotKeyReleased, kEventParamDirectObject, noErr,
+    eventHotKeyExistsErr, kEventClassKeyboard, kEventHotKeyExclusive, kEventHotKeyPressed, kEventHotKeyReleased, kEventParamDirectObject, noErr,
     typeEventHotKeyID, CFMachPortInvalidate, CFMachPortRef, CFRelease, CFRunLoopRemoveSource,
     CFRunLoopSourceRef, EventHandlerCallRef, EventHandlerRef, EventHotKeyID, EventHotKeyRef,
     EventRef, EventTypeSpec, GetApplicationEventTarget, GetEventKind, GetEventParameter,
@@ -110,6 +110,30 @@ impl GlobalHotKeyManager {
                     res
                 },
             };
+
+            // Captures patch: a normal registration succeeds even while
+            // another app (1Password's Quick Access) holds the chord
+            // exclusively, and then never fires. Only an exclusive request
+            // is refused in that case, so probe with one and release it at
+            // once; the chord is then claimed normally, never taken from an
+            // app that shares it.
+            unsafe {
+                let mut probe: EventHotKeyRef = std::mem::zeroed();
+                let status = RegisterEventHotKey(
+                    scan_code,
+                    mods,
+                    hotkey_id,
+                    GetApplicationEventTarget(),
+                    kEventHotKeyExclusive,
+                    &mut probe,
+                );
+                if status == eventHotKeyExistsErr {
+                    return Err(crate::Error::AlreadyRegistered(hotkey));
+                }
+                if status == noErr as _ {
+                    UnregisterEventHotKey(probe);
+                }
+            }
 
             let ptr = unsafe {
                 let mut hotkey_ref: EventHotKeyRef = std::mem::zeroed();

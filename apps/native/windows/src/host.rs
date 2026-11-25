@@ -55,6 +55,22 @@ pub fn exists() -> bool {
     HOST.with(|h| h.try_borrow().map_or(true, |h| h.is_some()))
 }
 
+/// Note the shortcuts another app holds in an open Preferences. Runs on
+/// every resident service pass, so it wakes the window only on a change.
+pub fn set_shortcut_conflicts(conflicts: &[captures_app::shortcuts::CaptureShortcut]) {
+    HOST.with(|h| {
+        let Ok(mut h) = h.try_borrow_mut() else {
+            return;
+        };
+        if let Some(host) = h.as_mut()
+            && host.scene.set_shortcut_conflicts(conflicts)
+        {
+            host.need = true;
+            host.wake();
+        }
+    });
+}
+
 pub fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
     HOST.with(|h| {
         let mut h = h.try_borrow_mut().ok()?;
@@ -103,6 +119,8 @@ pub struct Host {
     pub update_step: Option<crate::updates::Step>,
     /// Check for Updates: scroll to the Updates card after the next layout.
     jump_updates: bool,
+    /// Change Shortcut…: scroll to the Shortcuts card after the next layout.
+    jump_shortcuts: bool,
     /// A capture-bar link: reveal and highlight this row after the next layout.
     reveal: Option<captures_app::capture_menu::PreferenceTarget>,
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
@@ -234,6 +252,7 @@ impl Host {
                 open_feedback: false,
                 update_step: None,
                 jump_updates: false,
+                jump_shortcuts: false,
                 reveal: None,
                 woken: false,
                 ime: false,
@@ -299,6 +318,10 @@ impl Host {
         if std::mem::take(&mut self.jump_updates) {
             self.scene
                 .activate(crate::scene::Target::Nav(crate::scene::UPDATES_SECTION));
+        }
+        if std::mem::take(&mut self.jump_shortcuts) {
+            self.scene
+                .activate(crate::scene::Target::Nav(crate::scene::SHORTCUTS_SECTION));
         }
         if let Some(target) = self.reveal.take() {
             self.scene.reveal_target(target);
@@ -655,6 +678,12 @@ impl Host {
             self.layout = true;
             self.need = true;
         }
+    }
+
+    /// Bring the Shortcuts card into view (the tray's Change Shortcut…).
+    pub fn show_shortcuts(&mut self) {
+        self.jump_shortcuts = true;
+        self.need = true;
     }
 
     /// Bring the Updates card into view, as shipping's Check for Updates.

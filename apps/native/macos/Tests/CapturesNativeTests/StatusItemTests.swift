@@ -65,6 +65,32 @@ final class StatusItemTests: XCTestCase {
         XCTAssertFalse(menu.items[12].isEnabled)
     }
 
+    func testAShortcutAnotherAppHoldsLosesItsKeyAndOffersChangeShortcut() {
+        _ = NSApplication.shared
+        var changes = 0
+        let target = LiveStatusActions(newCapture: {}, capture: { _ in }, history: {}, preferences: {},
+                                       changeShortcut: { changes += 1 }, outputFolder: {}, quit: {})
+        target.shortcuts = ["CommandOrControl+Shift+Space", "CommandOrControl+Shift+4", "", "", "", "", ""]
+        let resting = target.makeMenu()
+        XCTAssertEqual(resting.items[0].keyEquivalent, " ")
+        // The menu checks again as it opens and repopulates in place.
+        target.willOpen = {
+            target.conflicts = [.newCapture: "Cmd+Shift+Space is used by another app — Change Shortcut…"]
+        }
+        target.menuNeedsUpdate(resting)
+        XCTAssertEqual(resting.items[0].title, "New Capture…")
+        XCTAssertEqual(resting.items[0].keyEquivalent, "", "a chord that never fires shows no hint")
+        XCTAssertEqual(resting.items[1].keyEquivalent, "4")
+        XCTAssertEqual(resting.items[7].title, "Cmd+Shift+Space is used by another app — Change Shortcut…")
+        XCTAssertEqual(resting.items[8].title, "")
+        resting.performActionForItem(at: 7)
+        XCTAssertEqual(changes, 1)
+        target.willOpen = { target.conflicts = [:] }
+        target.menuNeedsUpdate(resting)
+        XCTAssertEqual(resting.items[0].keyEquivalent, " ")
+        XCTAssertEqual(resting.items[7].title, "")
+    }
+
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
         _ = NSApplication.shared
         let root = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),

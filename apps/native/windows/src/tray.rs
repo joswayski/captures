@@ -5,6 +5,9 @@
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use captures_app::shortcuts::{
+    CaptureShortcut, ShortcutPlatform, conflict_menu_label, conflict_tooltip, shortcut_text,
+};
 use captures_app::update_notice::{TrayUpdateItem, UpdateStatus, tray_tooltip, tray_update_item};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, accelerator::Accelerator};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -25,10 +28,15 @@ pub enum Action {
     CheckUpdates,
     /// Shipping's left click opens Preferences once no notice is up.
     LeftClick,
+    /// The icon was pressed; its menu opens on release. Check the
+    /// conflicting shortcuts again so that menu is current.
+    Pressed,
+    /// A "… is used by another app — Change Shortcut…" row.
+    ChangeShortcut,
     Quit,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Shortcut {
     NewCapture,
     Region,
@@ -37,6 +45,20 @@ enum Shortcut {
     RecordRegion,
     RecordWindow,
     RecordDisplay,
+}
+
+impl Shortcut {
+    fn capture(self) -> CaptureShortcut {
+        match self {
+            Self::NewCapture => CaptureShortcut::NewCapture,
+            Self::Region => CaptureShortcut::Region,
+            Self::Window => CaptureShortcut::Window,
+            Self::Display => CaptureShortcut::Display,
+            Self::RecordRegion => CaptureShortcut::RecordRegion,
+            Self::RecordWindow => CaptureShortcut::RecordWindow,
+            Self::RecordDisplay => CaptureShortcut::RecordDisplay,
+        }
+    }
 }
 
 enum Row {
@@ -109,16 +131,11 @@ const MENU: [Row; 15] = [
 ];
 
 fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {
-    match shortcut {
-        Shortcut::NewCapture => &settings.new_capture_shortcut,
-        Shortcut::Region => &settings.region_shortcut,
-        Shortcut::Window => &settings.window_shortcut,
-        Shortcut::Display => &settings.display_shortcut,
-        Shortcut::RecordRegion => &settings.recording.video_shortcut,
-        Shortcut::RecordWindow => &settings.recording.window_shortcut,
-        Shortcut::RecordDisplay => &settings.recording.display_shortcut,
-    }
+    shortcut_text(settings, shortcut.capture())
 }
+
+/// The id of a conflict row, which opens Preferences at Shortcuts.
+const CHANGE_SHORTCUT: &str = "change-shortcut-";
 
 /// Shipping `tray_accelerator`: `KeyA`/`Digit1` codes become their key.
 fn accelerator(shortcut: &str) -> Option<Accelerator> {
@@ -157,6 +174,7 @@ fn accelerators(settings: &captures_settings::AppSettings) -> Vec<String> {
 fn menu(
     settings: &captures_settings::AppSettings,
     update: &TrayUpdateItem,
+    conflicts: &[CaptureShortcut],
 ) -> Result<Menu, String> {
     let menu = Menu::new();
     // Check for Updates works only in a Preview build with update metadata.
@@ -179,7 +197,9 @@ fn menu(
         let result = match *row {
             // Shipping `tray_menu_item`: a row whose accelerator the menu
             // rejects (Windows menus cannot show Super) keeps no shortcut.
+            // A chord another app holds never fires, so it shows no hint.
             Row::Item(id, label, _, keys) => keys
+                .filter(|keys| !conflicts.contains(&keys.capture()))
                 .and_then(|keys| accelerator(shortcut(settings, keys)))
                 .and_then(|keys| {
                     menu.append(&MenuItem::with_id(id, label, true, Some(keys)))
@@ -194,11 +214,26 @@ fn menu(
             Row::Separator => menu.append(&PredefinedMenuItem::separator()),
         };
         result.map_err(|error| error.to_string())?;
+        // Conflict rows follow Record Display, before the first separator.
+        if matches!(row, Row::Item(_, _, _, Some(Shortcut::RecordDisplay))) {
+            for action in conflicts {
+                let label = conflict_menu_label(
+                    shortcut_text(settings, *action),
+                    ShortcutPlatform::Windows,
+                );
+                let id = format!("{CHANGE_SHORTCUT}{}", action.id());
+                menu.append(&MenuItem::with_id(id, label, true, None))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
     }
     Ok(menu)
 }
 
 fn action(id: &str) -> Option<Action> {
+    if id.starts_with(CHANGE_SHORTCUT) {
+        return Some(Action::ChangeShortcut);
+    }
     MENU.iter().find_map(|row| match row {
         Row::Item(row, _, action, _) if *row == id => Some(*action),
         Row::Updates if id == "check-updates" => Some(Action::CheckUpdates),
@@ -212,6 +247,8 @@ pub struct Tray {
     accelerators: Vec<String>,
     settings: captures_settings::AppSettings,
     update: TrayUpdateItem,
+    update_tooltip: &'static str,
+    conflicts: Vec<CaptureShortcut>,
 }
 
 impl Tray {
@@ -229,7 +266,7 @@ impl Tray {
         let icon = TrayIconBuilder::new()
             .with_tooltip(captures_app::preview_channel::TRAY_NAME)
             .with_icon(icon)
-            .with_menu(Box::new(menu(settings, &tray_update_item(None))?))
+            .with_menu(Box::new(menu(settings, &tray_update_item(None), &[])?))
             .with_menu_on_left_click(false)
             .build()
             .map_err(|error| format!("Tray is unavailable: {error}"))?;
@@ -254,6 +291,7 @@ impl Tray {
                 }
             ) {
                 crate::gfx::prewarm();
+                send(&sender, &wake, Action::Pressed);
             }
             if matches!(
                 event,
@@ -272,7 +310,27 @@ impl Tray {
             accelerators: accelerators(settings),
             settings: settings.clone(),
             update: tray_update_item(None),
+            update_tooltip: tray_tooltip(None),
+            conflicts: Vec::new(),
         })
+    }
+
+    /// Follow the shortcuts another app holds: their rows, hints and the
+    /// tooltip, which outranks the update state's while any is held.
+    pub fn set_conflicts(&mut self, conflicts: Vec<CaptureShortcut>) {
+        if conflicts == self.conflicts {
+            return;
+        }
+        self.conflicts = conflicts;
+        self.refresh_tooltip();
+        self.rebuild();
+    }
+
+    fn refresh_tooltip(&self) {
+        let tooltip = conflict_tooltip(self.update_tooltip.to_owned(), self.conflicts.len());
+        if let Err(error) = self.icon.set_tooltip(Some(tooltip)) {
+            eprintln!("Could not refresh the tray tooltip: {error}");
+        }
     }
 
     /// The icon's physical screen rect, once the shell has laid it out.
@@ -312,14 +370,13 @@ impl Tray {
             return;
         }
         self.update = update;
-        if let Err(error) = self.icon.set_tooltip(Some(tray_tooltip(status))) {
-            eprintln!("Could not refresh the tray tooltip: {error}");
-        }
+        self.update_tooltip = tray_tooltip(status);
+        self.refresh_tooltip();
         self.rebuild();
     }
 
     fn rebuild(&mut self) {
-        match menu(&self.settings, &self.update) {
+        match menu(&self.settings, &self.update, &self.conflicts) {
             Ok(menu) => {
                 self.icon.set_menu(Some(Box::new(menu)));
                 self.accelerators = accelerators(&self.settings);
@@ -356,6 +413,34 @@ mod tests {
     }
 
     #[test]
+    fn a_held_shortcut_loses_its_hint_and_gets_a_change_row() {
+        let settings = captures_settings::AppSettings {
+            new_capture_shortcut: "Ctrl+Shift+Space".into(),
+            ..Default::default()
+        };
+        let conflicted = menu(
+            &settings,
+            &tray_update_item(None),
+            &[CaptureShortcut::NewCapture],
+        )
+        .unwrap();
+        let items = conflicted.items();
+        assert_eq!(items[0].id().0, "new-capture");
+        let row = items[7].as_menuitem().unwrap();
+        assert_eq!(
+            row.text(),
+            "Ctrl+Shift+Space is used by another app — Change Shortcut…"
+        );
+        assert_eq!(action(&row.id().0), Some(Action::ChangeShortcut));
+        assert!(matches!(
+            items[8],
+            tray_icon::menu::MenuItemKind::Predefined(_)
+        ));
+        let resting = menu(&settings, &tray_update_item(None), &[]).unwrap();
+        assert_eq!(items.len(), resting.items().len() + 1);
+    }
+
+    #[test]
     fn an_available_update_moves_its_row_above_new_capture() {
         use tray_icon::menu::MenuItemKind;
         let settings = captures_settings::AppSettings::default();
@@ -365,14 +450,14 @@ mod tests {
                 .map(|item| item.id().0.clone())
                 .collect()
         };
-        let resting = menu(&settings, &tray_update_item(None)).unwrap();
+        let resting = menu(&settings, &tray_update_item(None), &[]).unwrap();
         assert_eq!(ids(&resting)[0], "new-capture");
         let pinned = TrayUpdateItem {
             label: "Update Available — 2 changes".into(),
             enabled: true,
             pin_first: true,
         };
-        let pinned = menu(&settings, &pinned).unwrap();
+        let pinned = menu(&settings, &pinned, &[]).unwrap();
         let items = pinned.items();
         assert_eq!(
             items[0].as_menuitem().map(|item| item.text()).as_deref(),

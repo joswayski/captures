@@ -17,7 +17,7 @@ use std::{
     sync::{Arc, Mutex, Once},
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureShortcut {
     NewCapture,
@@ -86,27 +86,54 @@ pub fn selector_input_scope() -> Option<SelectorInputScope> {
     routes.input_scope()
 }
 
+/// The tray row for a shortcut another app holds. Neither macOS nor Windows
+/// says which app holds a chord, so the copy cannot name it.
+pub fn conflict_menu_label(shortcut: &str, platform: ShortcutPlatform) -> String {
+    format!(
+        "{} is used by another app — Change Shortcut…",
+        shortcut_display_tokens(shortcut, platform).join("+")
+    )
+}
+
+/// The Preferences note under a shortcut another app holds; one line under
+/// the recorder, so the tray row carries the instruction.
+pub const CONFLICT_NOTE: &str = "Used by another app";
+
+/// The tray tooltip while any shortcut is held by another app; `base` is the
+/// update state's tooltip otherwise.
+pub fn conflict_tooltip(base: String, conflicts: usize) -> String {
+    match conflicts {
+        0 => base,
+        1 => "Captures — A shortcut is used by another app".into(),
+        _ => "Captures — Some shortcuts are used by another app".into(),
+    }
+}
+
+/// The saved chord text for one capture shortcut.
+pub fn shortcut_text(settings: &AppSettings, action: CaptureShortcut) -> &str {
+    match action {
+        CaptureShortcut::NewCapture => &settings.new_capture_shortcut,
+        CaptureShortcut::Region => &settings.region_shortcut,
+        CaptureShortcut::Window => &settings.window_shortcut,
+        CaptureShortcut::Display => &settings.display_shortcut,
+        CaptureShortcut::RecordRegion => &settings.recording.video_shortcut,
+        CaptureShortcut::RecordWindow => &settings.recording.window_shortcut,
+        CaptureShortcut::RecordDisplay => &settings.recording.display_shortcut,
+    }
+}
+
 fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
     let mut result = Bindings::new();
-    for (text, action) in [
-        (&settings.new_capture_shortcut, CaptureShortcut::NewCapture),
-        (&settings.region_shortcut, CaptureShortcut::Region),
-        (&settings.window_shortcut, CaptureShortcut::Window),
-        (&settings.display_shortcut, CaptureShortcut::Display),
-        (
-            &settings.recording.video_shortcut,
-            CaptureShortcut::RecordRegion,
-        ),
-        (
-            &settings.recording.window_shortcut,
-            CaptureShortcut::RecordWindow,
-        ),
-        (
-            &settings.recording.display_shortcut,
-            CaptureShortcut::RecordDisplay,
-        ),
+    for action in [
+        CaptureShortcut::NewCapture,
+        CaptureShortcut::Region,
+        CaptureShortcut::Window,
+        CaptureShortcut::Display,
+        CaptureShortcut::RecordRegion,
+        CaptureShortcut::RecordWindow,
+        CaptureShortcut::RecordDisplay,
     ] {
-        let key = text
+        let key = shortcut_text(settings, action)
             .parse::<HotKey>()
             .map_err(|error| format!("Invalid {action:?} shortcut: {error}"))?;
         if key.id() == HotKey::new(None, Code::Escape).id() {
@@ -563,7 +590,11 @@ fn suspend_routes(
                 // A partial grab may have seen a chord Captures does not hold.
                 routes.clear();
             }
-            routes.occupied = occupied;
+            // Keep the last conflicts while suspended, so a warning stays up
+            // while Preferences, where it is fixed, has the keyboard.
+            if !suspended {
+                routes.occupied = occupied;
+            }
             Ok(())
         }
         Err(error) => {
@@ -571,6 +602,41 @@ fn suspend_routes(
             Err(error)
         }
     }
+}
+
+/// Retry the chords another app held. With `reprobe` (macOS, where an app
+/// that registers later takes a held chord exclusively and Captures is never
+/// told), release and claim the held chords again too. Returns whether the
+/// conflicts changed.
+fn recheck_routes(
+    manager: &dyn Registration,
+    registered: &mut Bindings,
+    routes: &Mutex<Routes>,
+    reprobe: bool,
+) -> Result<bool, String> {
+    let (desired, before, enabled) = {
+        let mut routes = routes.lock().unwrap();
+        if routes.suspended || (routes.occupied.is_empty() && !reprobe) {
+            return Ok(false);
+        }
+        let enabled = routes.enabled;
+        routes.enabled = false;
+        routes.clear();
+        (routes.bindings.clone(), routes.occupied.clone(), enabled)
+    };
+    // Never hold a callback's mutex while waiting on an OS hotkey worker.
+    let result = if reprobe {
+        sync_bindings(manager, registered, &Bindings::new(), false)
+            .and_then(|_| sync_bindings(manager, registered, &desired, false))
+    } else {
+        sync_bindings(manager, registered, &desired, false)
+    };
+    let mut routes = routes.lock().unwrap();
+    routes.enabled = enabled;
+    let occupied = result?;
+    let changed = occupied != before;
+    routes.occupied = occupied;
+    Ok(changed)
 }
 
 /// One live host owns this object on the AppKit/winit event-loop thread. OS
@@ -741,8 +807,45 @@ impl CaptureShortcuts {
         routes.enabled = enabled;
         let occupied = result?;
         routes.bindings = next;
-        routes.occupied = occupied;
+        // Suspended, nothing was claimed: keep the conflicts found before.
+        if !suspended {
+            routes.occupied = occupied;
+        }
         Ok(())
+    }
+
+    /// The capture shortcuts another app holds, which never reach Captures.
+    /// While Preferences suspends registration, the ones found before it.
+    pub fn conflicts(&self) -> Vec<CaptureShortcut> {
+        let routes = self.dispatcher.routes.lock().unwrap();
+        let mut conflicts: Vec<_> = routes
+            .occupied
+            .iter()
+            .filter_map(|id| routes.bindings.get(id).map(|binding| binding.action))
+            .collect();
+        conflicts.sort();
+        conflicts
+    }
+
+    /// Check the conflicts again, as a tray menu or Preferences opens, so a
+    /// chord the other app gave up works and one it took later is reported.
+    /// Returns whether [`Self::conflicts`] changed.
+    pub fn recheck_conflicts(&mut self) -> Result<bool, String> {
+        #[cfg(not(target_os = "linux"))]
+        let Backend::Direct(manager) = &self.backend;
+        #[cfg(target_os = "linux")]
+        let manager = match &self.backend {
+            Backend::Direct(manager) => manager,
+            Backend::Portal(_) => return Ok(false), // The desktop owns these keys.
+        };
+        let changed = recheck_routes(
+            manager.as_ref(),
+            &mut self.registered,
+            &self.dispatcher.routes,
+            cfg!(target_os = "macos"),
+        );
+        sync_win_shift_s_takeover(&self.registered);
+        changed
     }
 
     /// Release OS grabs while Preferences owns keyboard focus so its recorder
@@ -1575,6 +1678,60 @@ mod tests {
         assert!(others.contains(&new_capture));
         assert_eq!(*backend.keys.borrow(), others);
         assert_eq!(registered.keys().copied().collect::<BTreeSet<_>>(), others);
+    }
+
+    #[test]
+    fn rechecking_retries_occupied_chords_and_reprobes_held_ones() {
+        let desired = bindings(&settings()).unwrap();
+        let mut ids = desired.keys().copied();
+        let (taken, later) = (ids.next().unwrap(), ids.next().unwrap());
+        let mut backend = Backend {
+            fail: Some(taken),
+            ..Backend::default()
+        };
+        let mut registered = Bindings::new();
+        let routes = Mutex::new(Routes {
+            bindings: desired.clone(),
+            enabled: true,
+            ..Routes::default()
+        });
+        routes.lock().unwrap().occupied =
+            sync_bindings(&backend, &mut registered, &desired, false).unwrap();
+        // Still held elsewhere: nothing changes, and routing stays enabled.
+        assert!(!recheck_routes(&backend, &mut registered, &routes, false).unwrap());
+        assert!(routes.lock().unwrap().enabled);
+        // The other app gave it up: the retry claims it.
+        backend.fail = None;
+        assert!(recheck_routes(&backend, &mut registered, &routes, false).unwrap());
+        assert!(routes.lock().unwrap().occupied.is_empty());
+        assert_eq!(registered, desired);
+        // Without a reprobe a settled set is left alone, even if another app
+        // took a held chord since.
+        backend.fail = Some(later);
+        assert!(!recheck_routes(&backend, &mut registered, &routes, false).unwrap());
+        // A reprobe claims every chord again and finds the taken one.
+        assert!(recheck_routes(&backend, &mut registered, &routes, true).unwrap());
+        assert_eq!(routes.lock().unwrap().occupied, BTreeSet::from([later]));
+        assert!(!registered.contains_key(&later));
+        assert_eq!(registered.len(), desired.len() - 1);
+        // Suspended for the Preferences recorder: no OS calls at all.
+        routes.lock().unwrap().suspended = true;
+        backend.fail = None;
+        assert!(!recheck_routes(&backend, &mut registered, &routes, true).unwrap());
+        assert!(!registered.contains_key(&later));
+    }
+
+    #[test]
+    fn conflict_copy_shows_the_platform_keys() {
+        assert_eq!(
+            conflict_menu_label("CommandOrControl+Shift+Space", ShortcutPlatform::Macos),
+            "Cmd+Shift+Space is used by another app — Change Shortcut…"
+        );
+        assert_eq!(
+            conflict_menu_label("CommandOrControl+Shift+Space", ShortcutPlatform::Windows),
+            "Ctrl+Shift+Space is used by another app — Change Shortcut…"
+        );
+        assert_eq!(conflict_tooltip("Captures".into(), 0), "Captures");
     }
 
     #[test]

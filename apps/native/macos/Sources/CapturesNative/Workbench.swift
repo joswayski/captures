@@ -663,7 +663,7 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
     }
 }
 
-final class LiveStatusActions: NSObject {
+final class LiveStatusActions: NSObject, NSMenuDelegate {
     private let newCaptureAction: () -> Void
     private let captureAction: (StillCaptureKind) -> Void
     private let recordAction: (UnifiedCaptureTarget) -> Void
@@ -678,6 +678,13 @@ final class LiveStatusActions: NSObject {
     var shortcuts: [String] = []
     /// Shipping `tray_update_item`: nil keeps "Check for Updates…" in place.
     var updateItem: (label: String, enabled: Bool, pinFirst: Bool)?
+    /// Shortcuts another app holds, with their "… is used by another app —
+    /// Change Shortcut…" row. Their capture items show no key equivalent.
+    var conflicts: [CaptureShortcut: String] = [:]
+    /// Runs just before the menu shows, to check the conflicts again.
+    var willOpen: (() -> Void)?
+    var didClose: (() -> Void)?
+    private let changeShortcutAction: () -> Void
 
     init(newCapture: @escaping () -> Void,
          capture: @escaping (StillCaptureKind) -> Void,
@@ -685,10 +692,11 @@ final class LiveStatusActions: NSObject {
          history: @escaping () -> Void, preferences: @escaping () -> Void,
          feedback: @escaping () -> Void = {},
          checkUpdates: (() -> Void)? = nil,
+         changeShortcut: @escaping () -> Void = {},
          outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
         newCaptureAction = newCapture; captureAction = capture; recordAction = record
         historyAction = history; preferencesAction = preferences; feedbackAction = feedback
-        updateCheckAction = checkUpdates
+        updateCheckAction = checkUpdates; changeShortcutAction = changeShortcut
         outputFolderAction = outputFolder; quitAction = quit
     }
 
@@ -703,6 +711,7 @@ final class LiveStatusActions: NSObject {
     @objc func showPreferences() { preferencesAction() }
     @objc func sendFeedback() { feedbackAction() }
     @objc func checkUpdates() { updateCheckAction?() }
+    @objc func changeShortcut() { changeShortcutAction() }
     @objc func openOutputFolder() { outputFolderAction() }
     @objc func quit() { quitAction() }
 
@@ -710,6 +719,24 @@ final class LiveStatusActions: NSObject {
     /// through any capture item or New Capture, as in the shipping tray.
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = self
+        populate(menu)
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard let willOpen else { return }
+        willOpen()
+        menu.removeAllItems()
+        populate(menu)
+    }
+
+    func menuDidClose(_ menu: NSMenu) { didClose?() }
+
+    private static let shortcutOrder: [CaptureShortcut] = [.newCapture, .region, .window, .display,
+                                                           .recordRegion, .recordWindow, .recordDisplay]
+
+    private func populate(_ menu: NSMenu) {
         let updates = NSMenuItem(title: updateItem?.label ?? "Check for Updates…",
                                  action: #selector(checkUpdates), keyEquivalent: "")
         updates.target = self
@@ -724,6 +751,9 @@ final class LiveStatusActions: NSObject {
         add("Record Region", action: #selector(recordRegion), shortcut: 4, to: menu)
         add("Record Window", action: #selector(recordWindow), shortcut: 5, to: menu)
         add("Record Display", action: #selector(recordDisplay), shortcut: 6, to: menu)
+        for action in Self.shortcutOrder {
+            if let label = conflicts[action] { add(label, action: #selector(changeShortcut), to: menu) }
+        }
         menu.addItem(.separator())
         add("Capture History", action: #selector(showHistory), to: menu)
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)
@@ -733,12 +763,12 @@ final class LiveStatusActions: NSObject {
         menu.addItem(.separator())
         add("Quit Captures", action: #selector(quit), to: menu)
         menu.autoenablesItems = false
-        return menu
     }
 
     private func add(_ title: String, action: Selector, shortcut: Int? = nil, to menu: NSMenu) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         if let shortcut, shortcuts.indices.contains(shortcut),
+           conflicts[Self.shortcutOrder[shortcut]] == nil,
            let key = menuKeyEquivalent(shortcuts[shortcut]) {
             item.keyEquivalent = key.character
             item.keyEquivalentModifierMask = key.modifiers
@@ -1085,6 +1115,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutWakeObserver: NSObjectProtocol?
     private var shortcutFocusObservers: [NSObjectProtocol] = []
     private var shortcutSignature: [String]?
+    private var shortcutConflicts = ShortcutConflicts(rows: [], tooltip: "")
     private var shortcutEnabled: Bool?
     private var shortcutSelectorGeneration: UInt64?
     private var captureBusy = false
@@ -2057,6 +2088,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         preferencesWindow.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5 ? .darkAqua : .aqua)
         preferencesWindow.contentView = root
         preferencesController = makePreferencesController(root: root)
+        preferencesController?.setShortcutConflicts(shortcutConflictNotes)
     }
 
     /// First-run setup in its own window (shipping `show_onboarding`).
@@ -2211,11 +2243,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             self.showPreferences()
             self.options.nativeUpdateChecks?.check(quietly: true)
             self.preferencesController?.revealUpdates()
+        }, changeShortcut: { [weak self] in
+            self?.showPreferences()
+            self?.preferencesController?.revealShortcuts()
         }, outputFolder: { [weak self] in
             self?.openOutputFolder()
         }, quit: {
             requestApplicationTermination()
         })
+        actions.willOpen = { [weak self] in self?.refreshShortcutConflicts(recheck: true, rebuildMenu: false) }
+        // After the chosen item's action, never while AppKit still holds the menu.
+        actions.didClose = { DispatchQueue.main.async { [weak self] in self?.refreshStatusMenu() } }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button { configureStatusItemButton(button) }
         statusActions = actions
@@ -2238,13 +2276,40 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         } else {
             item = nil; tooltip = "Captures"
         }
-        let signature = statusActions.shortcuts + [item?.label ?? "", "\(item?.enabled ?? true)",
-                                                    "\(item?.pinFirst ?? false)", tooltip]
+        // A shortcut another app holds outranks the update state's tooltip.
+        let shownTooltip = shortcutConflicts.tooltip.isEmpty ? tooltip : shortcutConflicts.tooltip
+        let signature = statusActions.shortcuts + shortcutConflicts.rows.map(\.label) + [item?.label ?? "", "\(item?.enabled ?? true)",
+                                                    "\(item?.pinFirst ?? false)", shownTooltip]
         guard force || signature != statusMenuSignature else { return }
         statusMenuSignature = signature
         statusActions.updateItem = item
+        statusActions.conflicts = Dictionary(uniqueKeysWithValues: shortcutConflicts.rows.map { ($0.action, $0.label) })
         statusItem.menu = statusActions.makeMenu()
-        statusItem.button?.toolTip = tooltip
+        statusItem.button?.toolTip = shownTooltip
+    }
+
+    /// Follow the shortcuts another app holds into the menu, its tooltip and
+    /// Preferences. `recheck` claims them again first (the menu is opening);
+    /// without `rebuildMenu` the open menu repopulates itself.
+    private func refreshShortcutConflicts(recheck: Bool, rebuildMenu: Bool = true) {
+        guard let captureShortcuts, !terminating else { return }
+        do {
+            shortcutConflicts = try captureShortcuts.conflicts(recheck: recheck && !shortcutsSuspended)
+        } catch {
+            Metrics.write(["event": "shortcut-conflicts-error", "detail": error.localizedDescription])
+            return
+        }
+        preferencesController?.setShortcutConflicts(shortcutConflictNotes)
+        if rebuildMenu {
+            refreshStatusMenu()
+        } else {
+            // The tooltip and signature follow once the menu closes.
+            statusActions?.conflicts = Dictionary(uniqueKeysWithValues: shortcutConflicts.rows.map { ($0.action, $0.label) })
+        }
+    }
+
+    private var shortcutConflictNotes: [String: String] {
+        Dictionary(uniqueKeysWithValues: shortcutConflicts.rows.map { ($0.action.settingIdentifier, $0.note) })
     }
 
     private func installCaptureShortcuts() {
@@ -2309,6 +2374,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let captureRoutes = liveController?.captureInFlight == true
         captureShortcuts.setRestoreOnly(controlsHidden)
         captureShortcuts.setCaptureBusy(captureRoutes)
+        refreshShortcutConflicts(recheck: false)
         let enabled = captureShortcutsEnabled(captureBusy: captureBusy,
             selectorGeneration: shortcutSelectorGeneration,
             recordingControlsHidden: controlsHidden,

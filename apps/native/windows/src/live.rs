@@ -409,6 +409,7 @@ pub fn service() {
     }
     let recorder = crate::host::with_host(|h| h.scene.recording.is_some()).unwrap_or(false);
     suspend_shortcuts(recorder);
+    show_shortcut_conflicts();
     match crate::capture::service() {
         Some(Outcome::Captured(result)) => match *result {
             Ok(Some(artifact)) => captured(&options, artifact),
@@ -877,6 +878,11 @@ fn run(options: &Options, action: Action) {
             });
         }
         Action::Preferences | Action::LeftClick => open_preferences(options),
+        Action::Pressed => recheck_shortcut_conflicts(),
+        Action::ChangeShortcut => {
+            open_preferences(options);
+            crate::host::with_host(|h| h.show_shortcuts());
+        }
         Action::History => {
             if let Err(error) = crate::history::open(options, None) {
                 show_error(&format!("Couldn't open Capture History: {error}"));
@@ -962,6 +968,43 @@ fn sync_shortcuts(settings: &captures_settings::AppSettings) {
             }
         }
     });
+}
+
+/// Retry the chords another app held, as the tray menu is about to open.
+fn recheck_shortcut_conflicts() {
+    RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let Some(r) = r.as_mut() else { return };
+        if r.shortcuts_suspended {
+            return;
+        }
+        if let Some(shortcuts) = r.shortcuts.as_mut()
+            && let Err(error) = shortcuts.recheck_conflicts()
+        {
+            eprintln!("Could not check capture shortcuts again: {error}");
+        }
+    });
+    show_shortcut_conflicts();
+}
+
+/// The shortcuts another app holds, in the tray and an open Preferences.
+fn show_shortcut_conflicts() {
+    let conflicts = RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let r = r.as_mut()?;
+        let conflicts = r
+            .shortcuts
+            .as_ref()
+            .map(CaptureShortcuts::conflicts)
+            .unwrap_or_default();
+        if let Some(tray) = r.tray.as_mut() {
+            tray.set_conflicts(conflicts.clone());
+        }
+        Some(conflicts)
+    });
+    if let Some(conflicts) = conflicts {
+        crate::host::set_shortcut_conflicts(&conflicts);
+    }
 }
 
 /// Hidden recording controls keep New Capture as the chord that restores

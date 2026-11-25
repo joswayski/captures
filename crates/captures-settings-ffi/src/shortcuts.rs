@@ -1,5 +1,6 @@
 use captures_app::shortcuts::{
-    CaptureShortcuts, ShortcutKeyEvent, ShortcutPlatform, record_shortcut, shortcut_display_tokens,
+    CONFLICT_NOTE, CaptureShortcuts, ShortcutKeyEvent, ShortcutPlatform, conflict_menu_label,
+    conflict_tooltip, record_shortcut, shortcut_display_tokens, shortcut_text,
 };
 use captures_settings::AppSettings;
 use serde::Deserialize;
@@ -12,6 +13,33 @@ use std::{
 
 thread_local! {
     static SHORTCUTS: RefCell<Option<CaptureShortcuts>> = const { RefCell::new(None) };
+    /// The configured settings, for the conflict copy's keys.
+    static SETTINGS: RefCell<AppSettings> = RefCell::default();
+}
+
+/// The shortcuts another app holds, with their tray row, Preferences note
+/// and tooltip (empty without conflicts).
+fn conflicts(shortcuts: Option<&CaptureShortcuts>) -> Value {
+    let conflicts = shortcuts
+        .map(CaptureShortcuts::conflicts)
+        .unwrap_or_default();
+    SETTINGS.with(|settings| {
+        let settings = settings.borrow();
+        let rows: Vec<Value> = conflicts
+            .iter()
+            .map(|action| {
+                json!({
+                    "action": action,
+                    "label": conflict_menu_label(
+                        shortcut_text(&settings, *action),
+                        ShortcutPlatform::Macos,
+                    ),
+                    "note": CONFLICT_NOTE,
+                })
+            })
+            .collect();
+        json!({"conflicts": rows, "tooltip": conflict_tooltip(String::new(), rows.len())})
+    })
 }
 
 #[derive(Deserialize)]
@@ -36,6 +64,11 @@ enum Request {
         generation: Option<u64>,
     },
     Next,
+    /// Report conflicts; `recheck` first claims them again (menu opening).
+    Conflicts {
+        #[serde(default)]
+        recheck: bool,
+    },
     Close,
     Record {
         event: ShortcutKeyEvent,
@@ -58,6 +91,7 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                     let wake = wake.ok_or("A shortcut wake callback is required")?;
                     *slot = Some(CaptureShortcuts::new(&settings, move || wake())?);
                 }
+                SETTINGS.with(|saved| saved.replace((*settings).clone()));
                 // AppKit disables these live in WindowServer (shipping
                 // `disable_symbolic_hotkeys`); errors are only logged.
                 let takeover = slot
@@ -98,6 +132,12 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                     .ok_or("Capture shortcuts are not configured")?
                     .set_selector_generation(generation);
                 Ok(json!({}))
+            }
+            Request::Conflicts { recheck } => {
+                if recheck && let Some(shortcuts) = slot.as_mut() {
+                    shortcuts.recheck_conflicts()?;
+                }
+                Ok(conflicts(slot.as_ref()))
             }
             Request::Next => {
                 Ok(json!({"action":slot.as_ref().and_then(CaptureShortcuts::next_action)}))
@@ -186,6 +226,9 @@ mod tests {
                 "Capture shortcuts are not configured"
             );
         }
+        let unconfigured = call(r#"{"operation":"conflicts","recheck":true}"#);
+        assert_eq!(unconfigured["result"]["conflicts"], json!([]));
+        assert_eq!(unconfigured["result"]["tooltip"], "");
         assert_eq!(call(r#"{"operation":"close"}"#)["ok"], true);
         assert_eq!(call(r#"{"operation":"unsupported"}"#)["ok"], false);
         assert_eq!(call("not JSON")["ok"], false);
