@@ -85,6 +85,21 @@ impl PreviewStack {
         true
     }
 
+    /// Move a card to chronological `index` (clamped), as a drag within the
+    /// stack reorders it. False when the card is absent or already there.
+    pub fn move_card(&mut self, id: &str, index: usize) -> bool {
+        let Some(from) = self.ids.iter().position(|existing| existing == id) else {
+            return false;
+        };
+        let index = index.min(self.ids.len() - 1);
+        if from == index {
+            return false;
+        }
+        let card = self.ids.remove(from);
+        self.ids.insert(index, card);
+        true
+    }
+
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.ids.len();
         self.ids.retain(|existing| existing != id);

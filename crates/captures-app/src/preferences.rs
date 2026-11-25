@@ -117,7 +117,7 @@ pub struct Row {
 
 /// Static setting rows by persisted key (`recording.` prefixes nested keys).
 /// Rows whose description depends on state have their own functions below.
-pub const ROWS: [Row; 27] = [
+pub const ROWS: [Row; 28] = [
     Row {
         key: "appearance",
         title: "Interface theme",
@@ -152,6 +152,11 @@ pub const ROWS: [Row; 27] = [
         key: "mini_preview_placement",
         title: "Mini preview position",
         description: "Choose a screen corner. Collapsed previews stay on that edge, and the stack opens away from it. You can still drag the collapsed pile during a session.",
+    },
+    Row {
+        key: "mini_preview_drag_style",
+        title: "When you drag a preview out",
+        description: "Choose what its spot in the stack shows while you drag a preview into another app. To reorder previews, drag one up or down within the stack.",
     },
     Row {
         key: "include_mini_previews_in_captures",
@@ -390,6 +395,21 @@ pub const MINI_PREVIEW_PLACEMENTS: [(&str, &str); 4] = [
     ("bottom_left", "Bottom left"),
     ("bottom_right", "Bottom right"),
 ];
+/// `mini_preview_drag_style` values and names, the default first.
+pub const MINI_PREVIEW_DRAG_STYLES: [(&str, &str); 3] = [
+    ("frosted", "Frosted imprint"),
+    ("dock", "Dock gap"),
+    ("well", "Quiet well"),
+];
+
+/// The drag style's name, falling back to the default (Frosted imprint).
+pub fn mini_preview_drag_style_name(value: &str) -> &'static str {
+    MINI_PREVIEW_DRAG_STYLES
+        .iter()
+        .find(|(id, _)| *id == value)
+        .map_or(MINI_PREVIEW_DRAG_STYLES[0].1, |(_, name)| name)
+}
+
 pub const MINI_PREVIEW_POSITION_LABEL: &str = "Mini preview position";
 
 /// The placement name, falling back to the shipping default (Bottom left).
@@ -706,6 +726,14 @@ mod tests {
         );
         assert_eq!(mini_preview_placement_name("top_right"), "Top right");
         assert_eq!(mini_preview_placement_name("nope"), "Bottom left");
+        assert_eq!(mini_preview_drag_style_name("well"), "Quiet well");
+        assert_eq!(mini_preview_drag_style_name("nope"), "Frosted imprint");
+        // The persisted values are the setting's own serde names.
+        for (id, _) in MINI_PREVIEW_DRAG_STYLES {
+            let parsed: captures_settings::MiniPreviewDragStyle =
+                serde_json::from_value(serde_json::json!(id)).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), id);
+        }
         for key in RECORDING_TOGGLES {
             assert!(!row(&format!("recording.{key}")).title.is_empty());
         }

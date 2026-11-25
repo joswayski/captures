@@ -54,6 +54,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub mini_preview_placement: MiniPreviewPlacement,
     #[serde(default)]
+    pub mini_preview_drag_style: MiniPreviewDragStyle,
+    #[serde(default)]
     pub include_mini_previews_in_captures: bool,
     #[serde(default)]
     pub include_recording_controls_in_captures: bool,
@@ -97,6 +99,20 @@ impl MiniPreviewPlacement {
     pub const fn is_right(self) -> bool {
         matches!(self, Self::BottomRight | Self::TopRight)
     }
+}
+
+/// What a mini preview's spot in the stack shows while its file is dragged
+/// into another app (`captures_app::preview_drag_style`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MiniPreviewDragStyle {
+    /// A soft, blurred echo of the capture behind a hairline.
+    #[default]
+    Frosted,
+    /// The card leaves and the stack closes up behind it.
+    Dock,
+    /// An empty, recessed tile with one small glyph.
+    Well,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -259,6 +275,7 @@ impl Default for AppSettings {
             auto_start_on_selection: false,
             show_mini_previews: true,
             mini_preview_placement: MiniPreviewPlacement::default(),
+            mini_preview_drag_style: MiniPreviewDragStyle::default(),
             include_mini_previews_in_captures: false,
             include_recording_controls_in_captures: false,
             launch_at_login: true,

@@ -3,6 +3,9 @@ use captures_app::preview::{
     self, ThumbnailMonitorBounds, ThumbnailStackAnchor, ThumbnailStackOrigin, ThumbnailVisibility,
 };
 use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPresence};
+use captures_app::preview_drag_style::{
+    self, CardPose, DragEnd, DragOut, DragStyle, PressIntent, Reorder,
+};
 use captures_app::preview_motion;
 use captures_app::tray_notice::LogicalRect;
 use captures_settings::MiniPreviewPlacement;
@@ -697,6 +700,29 @@ pub unsafe extern "C" fn captures_preview_stack_remove_v1(
     handle.0.remove(id)
 }
 
+/// Move a card to chronological `index` (clamped), as a drag within the
+/// stack reorders it. False when it is absent or already there.
+/// # Safety
+/// Same handle/string contract as captures_preview_stack_insert_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_move_v1(
+    handle: *mut CapturesPreviewStack,
+    id: *const c_char,
+    index: usize,
+) -> bool {
+    if id.is_null() {
+        return false;
+    }
+    // SAFETY: Non-null pointers satisfy the documented handle/string contract.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    let Ok(id) = (unsafe { CStr::from_ptr(id) }).to_str() else {
+        return false;
+    };
+    handle.0.move_card(id, index)
+}
+
 /// # Safety
 /// Handle is null or live and not concurrently mutated/freed.
 #[unsafe(no_mangle)]
@@ -1197,6 +1223,325 @@ pub extern "C" fn captures_preview_clear_delay_ms_v1(
 #[unsafe(no_mangle)]
 pub extern "C" fn captures_preview_label_reveal_delay_ms_v1(depth: usize) -> f64 {
     preview_motion::label_reveal_delay_ms(depth)
+}
+
+/// The dragged card's pose (see `preview_drag_style::CardPose`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewDragPose {
+    pub opacity: f64,
+    pub scale: f64,
+    pub media_blur: f64,
+    pub media_opacity: f64,
+    pub media_scale: f64,
+    pub fill_opacity: f64,
+    pub chrome_opacity: f64,
+    pub hairline: f64,
+    pub well: f64,
+    pub glyph: f64,
+    pub glyph_scale: f64,
+    pub slot: f64,
+}
+
+impl From<CardPose> for CapturesPreviewDragPose {
+    fn from(p: CardPose) -> Self {
+        Self {
+            opacity: p.opacity,
+            scale: p.scale,
+            media_blur: p.media_blur,
+            media_opacity: p.media_opacity,
+            media_scale: p.media_scale,
+            fill_opacity: p.fill_opacity,
+            chrome_opacity: p.chrome_opacity,
+            hairline: p.hairline,
+            well: p.well,
+            glyph: p.glyph,
+            glyph_scale: p.glyph_scale,
+            slot: p.slot,
+        }
+    }
+}
+
+/// `mini_preview_drag_style` as a number: 0 frosted (and anything unknown),
+/// 1 dock, 2 well.
+fn drag_style(style: u32) -> DragStyle {
+    match style {
+        1 => DragStyle::Dock,
+        2 => DragStyle::Well,
+        _ => DragStyle::Frosted,
+    }
+}
+
+/// Opaque, single-owner file drag of one card. Calls must never overlap.
+pub struct CapturesPreviewDragOut(DragOut);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_drag_out_new_v1(
+    style: u32,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> *mut CapturesPreviewDragOut {
+    Box::into_raw(Box::new(CapturesPreviewDragOut(DragOut::new(
+        drag_style(style),
+        now_ms,
+        reduced_motion,
+    ))))
+}
+
+/// # Safety
+/// A non-null handle must be live, uniquely owned and freed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_drag_out_free_v1(handle: *mut CapturesPreviewDragOut) {
+    if !handle.is_null() {
+        // SAFETY: The caller transfers the Box allocated by new, once.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// The drag ended: `dropped` when another app took the file. First end counts.
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_drag_out_end_v1(
+    handle: *mut CapturesPreviewDragOut,
+    dropped: bool,
+    now_ms: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        let end = if dropped {
+            DragEnd::Dropped
+        } else {
+            DragEnd::Returned
+        };
+        handle.0.end(end, now_ms);
+    }
+}
+
+/// The pose at `now_ms`; returns whether the end has finished playing (the
+/// card is back at rest, or gone with its slot closed). Null output or
+/// handle returns true and writes nothing.
+/// # Safety
+/// Handle is live or null; output is writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_drag_out_pose_v1(
+    handle: *const CapturesPreviewDragOut,
+    now_ms: f64,
+    output: *mut CapturesPreviewDragPose,
+) -> bool {
+    // SAFETY: Caller guarantees null or live storage.
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return true;
+    };
+    if output.is_null() {
+        return true;
+    }
+    // SAFETY: Validated writable output.
+    unsafe { output.write(handle.0.pose(now_ms).into()) };
+    handle.0.finished(now_ms)
+}
+
+/// How far a card older than a closing slot moves toward the anchored edge
+/// (points, y down) for that slot's `slot` value.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_closing_shift_v1(slot: f64, top_anchor: bool) -> f64 {
+    preview_drag_style::closing_shift(slot, top_anchor)
+}
+
+/// A press that moved (dx, dy) points: 0 undecided, 1 reorder, 2 file drag.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_press_intent_v1(dx: f64, dy: f64, count: usize) -> u32 {
+    match preview_drag_style::press_intent(dx, dy, count) {
+        None => 0,
+        Some(PressIntent::Reorder) => 1,
+        Some(PressIntent::FileDrag) => 2,
+    }
+}
+
+/// Whether a reorder hands off to a file drag (see `reorder_escapes`).
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_reorder_escapes_v1(dx_outside: f64, beyond: f64) -> bool {
+    preview_drag_style::reorder_escapes(dx_outside, beyond)
+}
+
+/// Opaque, single-owner reorder of one card. Calls must never overlap.
+pub struct CapturesPreviewReorder(Reorder);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_reorder_new_v1(
+    count: usize,
+    from: usize,
+    top_anchor: bool,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> *mut CapturesPreviewReorder {
+    Box::into_raw(Box::new(CapturesPreviewReorder(Reorder::new(
+        count,
+        from,
+        top_anchor,
+        now_ms,
+        reduced_motion,
+    ))))
+}
+
+/// # Safety
+/// A non-null handle must be live, uniquely owned and freed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_free_v1(handle: *mut CapturesPreviewReorder) {
+    if !handle.is_null() {
+        // SAFETY: The caller transfers the Box allocated by new, once.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// The pointer moved `dy` points (y down) since the press.
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_pointer_v1(
+    handle: *mut CapturesPreviewReorder,
+    dy: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        handle.0.pointer(dy);
+    }
+}
+
+/// Let go (`cancel` false) or give up (`cancel` true, as a hand-off to a
+/// file drag does).
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_release_v1(
+    handle: *mut CapturesPreviewReorder,
+    cancel: bool,
+    now_ms: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        if cancel {
+            handle.0.cancel(now_ms);
+        } else {
+            handle.0.drop(now_ms);
+        }
+    }
+}
+
+/// Advance to `now_ms`: writes up to `capacity` visual y offsets (points,
+/// chronological) and the carried card's lift (0…1), and returns whether
+/// the reorder has settled; then commit `from → to` with
+/// `captures_preview_stack_move_v1` and drop the offsets.
+/// # Safety
+/// Handle is live and exclusive or null; offsets is null or writable for
+/// `capacity` doubles; the rest are null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_frame_v1(
+    handle: *mut CapturesPreviewReorder,
+    now_ms: f64,
+    offsets: *mut f64,
+    capacity: usize,
+    lift: *mut f64,
+    from: *mut usize,
+    to: *mut usize,
+) -> bool {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return true;
+    };
+    let (values, raised) = handle.0.frame(now_ms);
+    // SAFETY: Caller guarantees each output is null or writable.
+    unsafe {
+        if !offsets.is_null() {
+            for (i, value) in values.iter().take(capacity).enumerate() {
+                offsets.add(i).write(*value);
+            }
+        }
+        if !lift.is_null() {
+            lift.write(raised);
+        }
+        if !from.is_null() {
+            from.write(handle.0.from());
+        }
+        if !to.is_null() {
+            to.write(handle.0.to());
+        }
+    }
+    handle.0.settled(now_ms)
+}
+
+/// Preferences' looping preview of a style (see `preview_drag_style::demo`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewDragDemo {
+    pub card_tops: [f64; 3],
+    pub card_left: f64,
+    pub pose: CapturesPreviewDragPose,
+    pub ghost_x: f64,
+    pub ghost_y: f64,
+    pub ghost_opacity: f64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_drag_demo_v1(
+    style: u32,
+    elapsed_ms: f64,
+    reduced_motion: bool,
+) -> CapturesPreviewDragDemo {
+    let demo = preview_drag_style::demo(drag_style(style), elapsed_ms, reduced_motion);
+    CapturesPreviewDragDemo {
+        card_tops: demo.card_tops,
+        card_left: preview_drag_style::demo_card_left(),
+        pose: demo.pose.into(),
+        ghost_x: demo.ghost.0,
+        ghost_y: demo.ghost.1,
+        ghost_opacity: demo.ghost_opacity,
+    }
+}
+
+/// The drag styles' drawing constants.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewDragStyleMetrics {
+    pub hairline_width: f64,
+    pub hairline_opacity: f64,
+    pub well_fill_opacity: f64,
+    pub well_inner_shadow_blur: f64,
+    pub well_inner_shadow_opacity: f64,
+    pub glyph_diameter: f64,
+    pub glyph_disc_opacity: f64,
+    pub glyph_size: f64,
+    pub glyph_stroke: f64,
+    pub glyph_opacity: f64,
+    pub reorder_lift_scale: f64,
+    pub demo_width: f64,
+    pub demo_height: f64,
+    pub demo_card_width: f64,
+    pub demo_card_height: f64,
+    pub demo_loop_ms: f64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_drag_style_metrics_v1() -> CapturesPreviewDragStyleMetrics {
+    use preview_drag_style as d;
+    CapturesPreviewDragStyleMetrics {
+        hairline_width: d::HAIRLINE_WIDTH,
+        hairline_opacity: d::HAIRLINE_OPACITY,
+        well_fill_opacity: d::WELL_FILL_OPACITY,
+        well_inner_shadow_blur: d::WELL_INNER_SHADOW_BLUR,
+        well_inner_shadow_opacity: d::WELL_INNER_SHADOW_OPACITY,
+        glyph_diameter: d::GLYPH_DIAMETER,
+        glyph_disc_opacity: d::GLYPH_DISC_OPACITY,
+        glyph_size: d::GLYPH_SIZE,
+        glyph_stroke: d::GLYPH_STROKE,
+        glyph_opacity: d::GLYPH_OPACITY,
+        reorder_lift_scale: d::REORDER_LIFT_SCALE,
+        demo_width: d::DEMO_SIZE.0,
+        demo_height: d::DEMO_SIZE.1,
+        demo_card_width: d::DEMO_CARD.0,
+        demo_card_height: d::DEMO_CARD.1,
+        demo_loop_ms: d::DEMO_LOOP_MS,
+    }
 }
 
 #[cfg(test)]
@@ -1887,5 +2232,62 @@ mod tests {
             assert!(!captures_preview_visible_v1(null(), 1, true, true));
             assert!(!captures_preview_begin_v1(null_mut(), &mut second));
         }
+    }
+
+    #[test]
+    fn drag_styles_and_reorders_round_trip_through_the_abi() {
+        unsafe {
+            // Dock (1): away, then a return plays out and finishes at rest.
+            let drag = captures_preview_drag_out_new_v1(1, 0., false);
+            let mut pose = CapturesPreviewDragPose::default();
+            assert!(!captures_preview_drag_out_pose_v1(drag, 1_000., &mut pose));
+            assert_eq!((pose.opacity, pose.slot), (0., 0.));
+            captures_preview_drag_out_end_v1(drag, false, 1_000.);
+            assert!(captures_preview_drag_out_pose_v1(drag, 5_000., &mut pose));
+            assert_eq!(pose, CardPose::REST.into());
+            captures_preview_drag_out_free_v1(drag);
+            // Unknown styles are frosted, the default.
+            let frosted = captures_preview_drag_out_new_v1(99, 0., true);
+            captures_preview_drag_out_pose_v1(frosted, 0., &mut pose);
+            assert!(pose.media_blur > 0. && pose.slot == 1.);
+            captures_preview_drag_out_free_v1(frosted);
+            assert!(captures_preview_drag_out_pose_v1(null_mut(), 0., &mut pose));
+
+            let reorder = captures_preview_reorder_new_v1(3, 0, false, 0., true);
+            captures_preview_reorder_pointer_v1(reorder, 400.);
+            let (mut offsets, mut lift, mut from, mut to) = ([9.; 3], 0., 9, 9);
+            assert!(!captures_preview_reorder_frame_v1(
+                reorder,
+                16.,
+                offsets.as_mut_ptr(),
+                3,
+                &mut lift,
+                &mut from,
+                &mut to
+            ));
+            assert_eq!((from, to, lift), (0, 2, 1.));
+            assert_eq!(offsets[1], -preview_drag_style::SLOT_PITCH);
+            captures_preview_reorder_release_v1(reorder, false, 32.);
+            assert!(captures_preview_reorder_frame_v1(
+                reorder,
+                32.,
+                null_mut(),
+                0,
+                null_mut(),
+                null_mut(),
+                null_mut()
+            ));
+            captures_preview_reorder_free_v1(reorder);
+        }
+        assert_eq!(captures_preview_press_intent_v1(0., 8., 3), 1);
+        assert_eq!(captures_preview_press_intent_v1(8., 0., 3), 2);
+        assert_eq!(captures_preview_press_intent_v1(1., 1., 3), 0);
+        assert_eq!(
+            captures_preview_closing_shift_v1(0., true),
+            -preview_drag_style::SLOT_PITCH
+        );
+        let demo = captures_preview_drag_demo_v1(2, 1_000., false);
+        assert!(demo.ghost_opacity > 0. && demo.pose.glyph > 0.);
+        assert!(captures_preview_drag_style_metrics_v1().demo_loop_ms > 0.);
     }
 }

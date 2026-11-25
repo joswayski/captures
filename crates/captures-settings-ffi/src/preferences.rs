@@ -84,6 +84,7 @@ fn copy(platform: ShortcutPlatform) -> Value {
             })).collect::<Vec<_>>(),
         },
         "mini_preview_placements": pairs(&preferences::MINI_PREVIEW_PLACEMENTS),
+        "mini_preview_drag_styles": pairs(&preferences::MINI_PREVIEW_DRAG_STYLES),
         "options": {
             "screenshot_format": pairs(&preferences::SCREENSHOT_FORMATS),
             "screenshot_countdown_seconds": preferences::COUNTDOWN_SECONDS

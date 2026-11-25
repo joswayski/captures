@@ -348,6 +348,9 @@ CapturesPreviewStack *captures_preview_stack_new_v1(void);
 void captures_preview_stack_free_v1(CapturesPreviewStack *handle);
 bool captures_preview_stack_insert_v1(CapturesPreviewStack *handle, const char *id);
 bool captures_preview_stack_remove_v1(CapturesPreviewStack *handle, const char *id);
+/* Move a card to chronological index (clamped) when a drag within the stack
+ * reorders it. False when it is absent or already there. */
+bool captures_preview_stack_move_v1(CapturesPreviewStack *handle, const char *id, size_t index);
 /* Put a removed ID back at index (clamped), as a failed exit action does.
  * False for a present/invalid ID. */
 bool captures_preview_stack_restore_v1(CapturesPreviewStack *handle, const char *id, size_t index);
@@ -409,6 +412,54 @@ typedef struct {
 } CapturesDragSway;
 bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, double dy,
     double dt_ms, bool reduced_motion);
+/* Dragging a mini preview (captures_app::preview_drag_style). Styles: 0
+ * frosted (default, and anything unknown), 1 dock, 2 well. A drag-out
+ * handle's pose_v1 writes the dragged card's pose at now_ms and returns
+ * whether its end has finished playing (back at rest, or gone with its slot
+ * closed); end_v1 counts once. Older cards move closing_shift_v1(pose.slot)
+ * toward the anchored edge. press_intent_v1: 0 undecided, 1 reorder, 2 file
+ * drag. A reorder handle's frame_v1 writes each card's visual y offset
+ * (chronological, up to capacity), the carried card's lift and from/to, and
+ * returns whether it settled after release; then commit from -> to with
+ * captures_preview_stack_move_v1. Calls on one handle must never overlap;
+ * free each handle exactly once. */
+typedef struct {
+    double opacity, scale, media_blur, media_opacity, media_scale, fill_opacity,
+        chrome_opacity, hairline, well, glyph, glyph_scale, slot;
+} CapturesPreviewDragPose;
+typedef struct CapturesPreviewDragOut CapturesPreviewDragOut;
+CapturesPreviewDragOut *captures_preview_drag_out_new_v1(uint32_t style, double now_ms,
+    bool reduced_motion);
+void captures_preview_drag_out_free_v1(CapturesPreviewDragOut *handle);
+void captures_preview_drag_out_end_v1(CapturesPreviewDragOut *handle, bool dropped, double now_ms);
+bool captures_preview_drag_out_pose_v1(const CapturesPreviewDragOut *handle, double now_ms,
+    CapturesPreviewDragPose *output);
+double captures_preview_closing_shift_v1(double slot, bool top_anchor);
+uint32_t captures_preview_press_intent_v1(double dx, double dy, size_t count);
+bool captures_preview_reorder_escapes_v1(double dx_outside, double beyond);
+typedef struct CapturesPreviewReorder CapturesPreviewReorder;
+CapturesPreviewReorder *captures_preview_reorder_new_v1(size_t count, size_t from, bool top_anchor,
+    double now_ms, bool reduced_motion);
+void captures_preview_reorder_free_v1(CapturesPreviewReorder *handle);
+void captures_preview_reorder_pointer_v1(CapturesPreviewReorder *handle, double dy);
+void captures_preview_reorder_release_v1(CapturesPreviewReorder *handle, bool cancel, double now_ms);
+bool captures_preview_reorder_frame_v1(CapturesPreviewReorder *handle, double now_ms,
+    double *offsets, size_t capacity, double *lift, size_t *from, size_t *to);
+typedef struct {
+    double card_tops[3];
+    double card_left;
+    CapturesPreviewDragPose pose;
+    double ghost_x, ghost_y, ghost_opacity;
+} CapturesPreviewDragDemo;
+CapturesPreviewDragDemo captures_preview_drag_demo_v1(uint32_t style, double elapsed_ms,
+    bool reduced_motion);
+typedef struct {
+    double hairline_width, hairline_opacity, well_fill_opacity, well_inner_shadow_blur,
+        well_inner_shadow_opacity, glyph_diameter, glyph_disc_opacity, glyph_size, glyph_stroke,
+        glyph_opacity, reorder_lift_scale, demo_width, demo_height, demo_card_width,
+        demo_card_height, demo_loop_ms;
+} CapturesPreviewDragStyleMetrics;
+CapturesPreviewDragStyleMetrics captures_preview_drag_style_metrics_v1(void);
 /* Shipping hover-fan stagger: milliseconds a pile card at depth waits before
  * its fan transition (transform, shade and glow; media blur when media). */
 double captures_preview_fan_delay_ms_v1(size_t depth, bool media);
