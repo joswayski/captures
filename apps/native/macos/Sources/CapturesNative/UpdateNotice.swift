@@ -258,6 +258,8 @@ final class UpdateNoticeModel {
     private(set) var simulating = false
     private(set) var tickInterval: TimeInterval?
     var showChangelog = true
+    /// The stub's `ViewState` hold: the offered update's notes and height.
+    private var held: [String: Any] = [:]
     var changed: () -> Void = {}
     var event: (String, [String: Any]) -> Void = { name, fields in
         var row = fields; row["event"] = name; Metrics.write(row)
@@ -289,16 +291,22 @@ final class UpdateNoticeModel {
         guard let status = try transport.request(["operation": "fixture", "name": fixture])["status"] as? [String: Any]
         else { throw AppBridgeError.invalidResponse }
         self.status = status
+        held = [:]
         visible = true; simulating = false; tickInterval = nil
         changed()
     }
 
     func presentation() throws -> UpdateNoticePresentation {
         if let checkedPresentation { return try UpdateNoticePresentation(checkedPresentation) }
-        return try UpdateNoticePresentation(transport.request([
-            "operation": "present", "status": status.map { $0 as Any } ?? NSNull(),
-            "view": ["show_changelog": showChangelog, "action_error": NSNull(), "installing": false],
-        ]))
+        return try UpdateNoticePresentation(present(status))
+    }
+
+    private func present(_ status: [String: Any]?) throws -> [String: Any] {
+        var view: [String: Any] = ["show_changelog": showChangelog, "action_error": NSNull(), "installing": false]
+        view.merge(held) { _, held in held }
+        return try transport.request([
+            "operation": "present", "status": status.map { $0 as Any } ?? NSNull(), "view": view,
+        ])
     }
 
     func placement(monitor: CGRect, workArea: CGRect, tray: CGRect?, cardWidth: CGFloat,
@@ -318,6 +326,16 @@ final class UpdateNoticeModel {
         do {
             let result = try transport.request(["operation": "stub", "status": status, "event": event])
             self.status = result["status"] as? [String: Any]
+            // Shipping's `ViewState::follow`: the offered list and height stay
+            // on screen while that update downloads and restarts.
+            switch (status["state"] as? String, self.status?["state"] as? String) {
+            case ("available"?, "downloading"?), ("available"?, "restarting"?):
+                held = [:]
+                let offered = try present(status)
+                held = ["held_notes": offered["notes"] ?? NSNull(), "held_height": offered["card_height"] ?? 0]
+            case (_, "downloading"?), (_, "restarting"?): break
+            default: held = [:]
+            }
             tickInterval = (result["tick_ms"] as? Double).map { $0 / 1000 }
             if self.status == nil {
                 visible = false; simulating = false
@@ -1147,7 +1165,8 @@ final class UpdateNoticeController {
             // shrinks to its rendered list, and holds the offered card's
             // height while that list stays on to download and restart.
             if let fitted = view?.fittedHeight {
-                var height = min(fitted, presentation.cardHeight)
+                // Whole points, so the caret tip stays put across heights.
+                var height = min(ceil(fitted), presentation.cardHeight)
                 switch presentation.visualState {
                 case "available": heldHeight = height
                 case "downloading", "restarting":

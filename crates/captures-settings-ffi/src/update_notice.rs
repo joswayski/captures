@@ -144,6 +144,20 @@ mod tests {
         let step = call(&json!({"operation":"stub","status":status,"event":"install"}).to_string());
         assert_eq!(step["result"]["status"]["state"], "downloading");
         assert_eq!(step["result"]["tick_ms"], 400);
+        // AppKit's stub holds the offered list by sending it back as the view's
+        // `held_notes`, as `ViewState::follow` keeps it.
+        let offered = call(
+            &json!({"operation":"present","status":status,"view":{"show_changelog":true}})
+                .to_string(),
+        );
+        let held = call(
+            &json!({"operation":"present","status":step["result"]["status"],
+                "view":{"held_notes":offered["result"]["notes"]}})
+            .to_string(),
+        );
+        assert_eq!(held["result"]["title"], "Updating Captures");
+        assert!(offered["result"]["notes"].is_object());
+        assert_eq!(held["result"]["notes"], offered["result"]["notes"]);
 
         let placed = call(
             r#"{"operation":"placement","monitor":{"x":0,"y":0,"width":1440,"height":900},

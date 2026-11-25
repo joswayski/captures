@@ -885,7 +885,8 @@ impl Notice {
             return;
         };
         let estimate = self.presentation.card_height;
-        let mut height = f64::from(fitted).min(estimate);
+        // Whole DIPs, so the caret tip stays put across heights.
+        let mut height = f64::from(fitted).ceil().min(estimate);
         match self.presentation.visual_state.as_str() {
             "available" => self.held = height,
             "downloading" | "restarting" if self.presentation.notes.is_some() => {
@@ -2623,7 +2624,7 @@ pub fn render_offscreen(
         let measured = paint(dc, &g, &t, &presentation, &placement, &ui);
         unsafe { dc.PopAxisAlignedClip() };
         let placement = match measured?.fitted {
-            Some(fitted) => place(f64::from(fitted).min(presentation.card_height)),
+            Some(fitted) => place(f64::from(fitted).ceil().min(presentation.card_height)),
             None => placement,
         };
         let mut base = windows_numerics::Matrix3x2::identity();

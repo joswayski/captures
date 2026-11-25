@@ -176,11 +176,15 @@ final class UpdateNoticeTests: XCTestCase {
         model.perform(.openPullRequest("https://github.com/joswayski/captures/pull/265"))
         XCTAssertTrue(events.contains("update-notice-open-url"))
 
+        let offered = try model.presentation()
+        XCTAssertNotNil(offered.notes)
         model.perform(.install)
         XCTAssertEqual(model.status?["state"] as? String, "downloading")
         XCTAssertEqual(model.tickInterval, 0.4)
-        let download = try model.presentation().download
-        XCTAssertEqual(download?.percent, 0)
+        let downloading = try model.presentation()
+        XCTAssertEqual(downloading.download?.percent, 0)
+        XCTAssertEqual(downloading.notes?.groups.count, offered.notes?.groups.count,
+                       "the offered list stays on while it downloads")
         model.perform(.dismiss)
         XCTAssertTrue(model.visible, "Escape must not dismiss while downloading")
         XCTAssertTrue(events.contains("update-notice-dismiss-blocked"))
@@ -188,6 +192,7 @@ final class UpdateNoticeTests: XCTestCase {
         var ticks = 0
         while model.status?["state"] as? String == "downloading", ticks < 20 { model.tick(); ticks += 1 }
         XCTAssertEqual(model.status?["state"] as? String, "restarting")
+        XCTAssertNotNil(try model.presentation().notes, "and while it restarts")
         model.tick(); model.tick(); model.tick()
         XCTAssertNil(model.status)
         XCTAssertFalse(model.visible)
