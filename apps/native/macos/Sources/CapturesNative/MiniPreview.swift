@@ -2421,10 +2421,28 @@ final class MiniPreviewView: NSView {
         super.updateTrackingAreas()
     }
 
+    override func mouseEntered(with event: NSEvent) {
+        guard event.trackingArea === pointerTracking else { super.mouseEntered(with: event); return }
+        refreshCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         samplePointer(point)
+        refreshCursor(at: point)
+    }
+
+    /// A pointer that jumps onto a control and rests sends only this event:
+    /// entering the stack brings no `mouseMoved`, and the card under it shows
+    /// its controls in its own `mouseEntered`, which can run after this one.
+    /// Check again once the event is handled so the hand needs no second move.
+    private func refreshCursor(at point: NSPoint) {
         updateCursor(at: point)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            let now = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if self.bounds.contains(now) { self.updateCursor(at: now) }
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
