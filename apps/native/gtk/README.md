@@ -229,7 +229,7 @@ the helper's relaunch; a development build needs explicit absolute
 `--history-root` and `--settings-file` with it. The update notice
 (`--scene update --update NAME`, one of `captures_app::update_notice::FIXTURES`)
 renders shipping's card from the shared presentation and walks the shared
-stub (Update now downloads, restarts and closes; nothing is downloaded or
+stub (Update downloads, restarts and closes; nothing is downloaded or
 installed). `--scene update --update-live NAME` (`available`, `closing`,
 `manual`, `downloading`, `verifying`, `installing`, `failed`, `check-failed`)
 renders the live notice for one worker state, and a development `--live` app

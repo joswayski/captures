@@ -108,15 +108,21 @@ final class UpdateNoticeTests: XCTestCase {
 
         try model.load(fixture: "available")
         var p = try model.presentation()
-        XCTAssertEqual(p.title, "Update available")
+        XCTAssertEqual(p.title, "Captures update available")
+        XCTAssertEqual(p.icon, "none")
         XCTAssertEqual(p.description, "Version 2026.08.27.5 · 12.6 MB")
         XCTAssertEqual(p.notes?.stacked, true)
         XCTAssertEqual(p.notes?.groups.map(\.displayVersion), ["2026.08.27.5", "2026.08.27.3"])
+        XCTAssertNil(p.notes?.groups.first?.tag, "the newest release reads untagged")
+        XCTAssertEqual(p.notes?.groups.last?.tag, UpdateNoticeVersionLink(text: "2026.08.27.3",
+            url: "https://github.com/joswayski/captures/releases/tag/v2026.08.27.3"))
         XCTAssertEqual(p.notes?.groups.first?.items.first?.pullNumber, 265)
         XCTAssertEqual(p.notes?.groups.first?.items.first?.pullURL, "https://github.com/joswayski/captures/pull/265")
         XCTAssertEqual(p.dismiss?.label, "Not now")
-        XCTAssertEqual(p.primary?.label, "Update now")
-        XCTAssertEqual(p.versionLink, UpdateNoticeVersionLink(text: "2026.08.27.5",
+        XCTAssertEqual(p.primary?.label, "Update")
+        XCTAssertEqual(p.footerNote,
+            "Captures restarts to finish. Open captures reopen, unsaved screenshot edits included.")
+        XCTAssertEqual(p.versionLink, UpdateNoticeVersionLink(text: "Version 2026.08.27.5",
             url: "https://github.com/joswayski/captures/releases/tag/v2026.08.27.5"))
         XCTAssertNil(p.notes?.groups.first?.items.first?.title)
 
@@ -130,7 +136,7 @@ final class UpdateNoticeTests: XCTestCase {
             "When another app already owns one of your shortcuts, the rest keep working instead of all going quiet.")
         var raw: [String: Any] = ["visual_state": "available", "icon": "app", "icon_tone": "accent",
             "title": "Update available", "description": "Version 2026.11.22.3", "card_width": 400.0,
-            "card_height": 168.0, "version_link": ["text": "2026.11.22.3", "url": "https://example.com/v"]]
+            "card_height": 168.0, "version_link": ["text": "Version 2026.11.22.3", "url": "https://example.com/v"]]
         XCTAssertEqual(try UpdateNoticePresentation(raw).versionLink?.url, "https://example.com/v")
         raw["version_link"] = ["text": "not in the description", "url": "https://example.com"]
         XCTAssertNil(try UpdateNoticePresentation(raw).versionLink, "the link text must appear in the description")
@@ -140,16 +146,17 @@ final class UpdateNoticeTests: XCTestCase {
         model.showChangelog = false
         p = try model.presentation()
         XCTAssertNil(p.notes, "Preferences can still turn release notes off")
-        XCTAssertEqual(p.cardHeight, 168)
+        XCTAssertEqual(p.cardHeight, 192)
 
         try model.load(fixture: "closing")
-        XCTAssertEqual(try model.presentation().closeWarning,
-            "Your open captures will reopen after the update. Unsaved screenshot edits are kept.")
+        XCTAssertEqual(try model.presentation().footerNote,
+            "Captures restarts to finish. Open captures reopen, unsaved screenshot edits included.",
+            "open captures change nothing: the same note shows")
 
         try model.load(fixture: "restarting")
         p = try model.presentation()
-        XCTAssertEqual(p.title, "Updated")
-        XCTAssertEqual(p.restartMessage, "Reopening in 3 seconds…")
+        XCTAssertEqual(p.title, "Captures updated")
+        XCTAssertEqual(p.restartMessage, "Restarting in 3…")
         XCTAssertTrue(p.dismissBlocked)
         XCTAssertFalse(p.hasFooter)
 
@@ -222,16 +229,15 @@ final class UpdateNoticeTests: XCTestCase {
             view.onAction = { actions.append($0) }
             view.render(p, placement: placement)
             XCTAssertEqual(view.layer?.sublayers?.filter { $0.name == "update-caret" }.count, 1, name)
-            if let warning = p.closeWarning {
-                let box = try XCTUnwrap(view.subviews.flatMap(\.subviews).first {
-                    $0.accessibilityLabel() == warning
-                })
-                let glyph = try XCTUnwrap(box.subviews.compactMap { $0 as? NSImageView }.first)
+            if let note = p.footerNote {
+                let card = try XCTUnwrap(view.subviews.first)
+                XCTAssertNotNil(card.subviews.first { $0.accessibilityLabel() == note }, name)
+                let glyph = try XCTUnwrap(card.subviews.compactMap { $0 as? NSImageView }.first)
                 let image = try XCTUnwrap(glyph.image)
                 XCTAssertTrue(image.representations.contains { $0 is NSCustomImageRep },
-                              "close warnings use custom shipping paths, not SF Symbols")
-                XCTAssertEqual(image.size, NSSize(width: 16, height: 16))
-                XCTAssertFalse(glyph.isAccessibilityElement(), "the warning text names the whole row")
+                              "the restart note uses shipping paths, not SF Symbols")
+                XCTAssertEqual(image.size, NSSize(width: 12, height: 12))
+                XCTAssertFalse(glyph.isAccessibilityElement(), "the note's text names it")
             }
             let links = view.subviews.flatMap(\.subviews).compactMap { $0 as? UpdateNoticeLinkHotspot }
             XCTAssertEqual(links.count, p.versionLink == nil ? 0 : 1, name)

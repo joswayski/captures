@@ -2182,8 +2182,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 self.options.nativeUpdateChecks?.check()
             }
             controller.model.acquire = { [weak self] action in
-                guard let self, !self.captureBusy, !self.terminating, self.permissionSheet == nil else { return }
-                self.options.nativeUpdateChecks?.acquire(action)
+                guard let self, !self.captureBusy, !self.terminating, self.permissionSheet == nil,
+                      let checks = self.options.nativeUpdateChecks else { return }
+                // An installed app's Update (or Try again) is the Preferences
+                // card's one step: download and verify, then install.
+                if action == .install, checks.card != nil { checks.performCardStep() }
+                else { checks.acquire(action) }
             }
             controller.model.openPullRequest = { value in
                 guard let url = URL(string: value) else { return false }

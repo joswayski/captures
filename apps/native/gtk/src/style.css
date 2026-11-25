@@ -3560,22 +3560,6 @@ window.captures.notice-window {
   font-size: var(--text-sm);
   line-height: var(--lh-snug-sm);
 }
-.captures .update-close-warning {
-  margin: 0 var(--s-6) var(--s-3);
-  padding: var(--s-3) var(--s-4);
-  border: 1px solid alpha(var(--caution-text), 0.32);
-  border-radius: var(--r-md);
-  color: var(--caution-text);
-  background: var(--caution-surface);
-}
-.captures .update-close-warning-icon {
-  margin-top: 1px;
-  margin-right: var(--s-3);
-}
-.captures .update-close-warning-text {
-  font-size: var(--text-sm);
-  line-height: var(--lh-snug-sm);
-}
 .captures .update-notice-footer {
   /* 56 px border-box minimum. */
   min-height: 32px;
@@ -3615,6 +3599,69 @@ window.captures.notice-window {
 }
 .captures .update-notice-footer button:disabled {
   opacity: 0.45;
+}
+
+/* An update's own cards: no icon, one list under a hairline, and a darker
+   footer bar holding the restart note, progress and buttons. */
+.captures .update-notice-update .update-notice-copy {
+  margin-left: 0;
+}
+.captures .update-notice-update .update-notice-body {
+  padding: 0 var(--s-6);
+}
+.captures .update-notice-update .update-notes {
+  padding: var(--s-5) 0;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: none;
+}
+/* One list: older releases continue it without a rule between them. */
+.captures .update-notice-update .update-notes-group + .update-notes-group {
+  margin-top: var(--s-4);
+  padding-top: 0;
+  border-top: none;
+}
+.captures .update-notes-tag label.update-version-link-text {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+.captures .update-notes-tag .update-version-link-icon {
+  color: var(--text-faint);
+}
+.captures .update-notice-footer-bar {
+  padding: var(--s-5) var(--s-6) var(--s-6);
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 calc(var(--r-xl) - 1px) calc(var(--r-xl) - 1px);
+  background: var(--surface-sunken);
+}
+.captures .update-footer-note {
+  margin-bottom: var(--s-4);
+  color: var(--text-faint);
+}
+.captures .update-footer-note-icon {
+  margin-top: 2px;
+  margin-right: var(--s-3);
+}
+.captures .update-footer-note-text {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-notice-update .update-notice-footer {
+  min-height: 0;
+  padding: 0;
+}
+.captures .update-notice-update .update-notice-footer button.update-dismiss {
+  border-color: var(--border);
+}
+.captures .update-notice-update .update-download,
+.captures .update-notice-update .update-restart {
+  padding: var(--s-1) 0 var(--s-2);
+  border: none;
+  border-radius: 0;
+  background: none;
 }
 
 /* ------------------------------------------------- capture overlays ---- */

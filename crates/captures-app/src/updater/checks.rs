@@ -687,6 +687,9 @@ impl CheckWorker {
         if self.automatic_check && !matches!(self.status, CheckStatus::Available { .. }) {
             return None;
         }
+        if self.preview {
+            return self.preview_notice(show_changelog, open_captures);
+        }
         let will_close = open_captures && self.install_request_enabled;
         let current_version = self.current_version.clone();
         let current_display_version = current_version.clone();
@@ -830,73 +833,16 @@ impl CheckWorker {
         }
         // The installed update restarts Captures and reopens what was open;
         // with nothing open there is nothing to warn about.
-        if will_close
+        p.footer_note = (will_close
             && matches!(
                 self.status,
                 CheckStatus::Available { .. } | CheckStatus::Staged { .. }
-            )
-        {
-            p.close_warning = Some(notice::open_captures_warning(true).into());
-        }
+            ))
+        .then(|| notice::open_captures_warning(true).into());
         // Development descriptions name raw versions without a release page.
         p.version_link = None;
-        // A staged update's two-line warning, in place of the status line.
-        let staged_height = notice::card_height(None, false) - notice::STATUS_HEIGHT
-            + notice::WARNING_HEIGHT
-            + 16.0;
-        if self.preview {
-            p.title = match self.status {
-                CheckStatus::Checking => "Checking for updates",
-                CheckStatus::UpToDate => "Captures is up to date",
-                CheckStatus::Downloading { .. } => "Downloading update",
-                CheckStatus::Staged { .. } => "Update ready to install",
-                CheckStatus::Error { .. } | CheckStatus::DownloadError { .. } => "Update failed",
-                _ => "Captures update",
-            }
-            .into();
-            p.description = self.presentation().status;
-            // Shipping's `Version … · 12.6 MB`: what Download will fetch.
-            if let CheckStatus::Available { release } = &self.status
-                && release.size > 0
-            {
-                p.description = format!(
-                    "{} · {}",
-                    p.description,
-                    notice::format_update_size(release.size)
-                );
-            }
-            p.version_link = match &self.status {
-                CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
-                    notice::version_link(&super::display_version(&release.version))
-                }
-                _ => None,
-            };
-            // A staged update says what Restart does in its close warning;
-            // a second line saying the same thing was redundant.
-            p.status_message = None;
-            if p.close_warning.is_some() && matches!(self.status, CheckStatus::Staged { .. }) {
-                p.card_height = staged_height;
-            }
-            if let Some(error) = &mut p.error {
-                error.fallback_prefix = "Try again, or ".into();
-                error.fallback_link = "download from captur.es".into();
-                error.fallback_suffix = ".".into();
-            }
-            if !self.staging_enabled
-                && matches!(self.status, CheckStatus::Available { .. })
-                && let Some(footer) = &mut p.footer
-            {
-                // Opens captur.es in the browser: a trailing link icon.
-                footer.primary = Some(Button {
-                    label: "Download update".into(),
-                    enabled: true,
-                    action: Action::OpenDownloadPage,
-                    trailing_icon: Some("external-link".into()),
-                });
-            }
-        }
         // Every step of one update shares the tallest of its Available,
-        // progress and Restart and install cards, so the notice does not jump
+        // progress and staged cards, so the notice does not jump
         // as one replaces another (an error may still grow it).
         if let CheckStatus::Available { release }
         | CheckStatus::Downloading { release, .. }
@@ -917,16 +863,106 @@ impl CheckWorker {
                 download_size: Some(release.size),
                 will_close_open_captures: will_close,
             };
-            let staged = if self.preview && self.install_request_enabled {
-                staged_height
-            } else {
-                0.0
-            };
             p.card_height = p
                 .card_height
                 .max(notice::card_height(Some(&available), show_changelog))
-                .max(notice::card_height(None, false))
-                .max(staged);
+                .max(notice::card_height(None, false));
+        }
+        Some(p)
+    }
+
+    /// The installed app's notice, as Win32 and GTK map their status: one
+    /// Update downloads, verifies and installs (hosts route it through the
+    /// Preferences card's step), so a verified package still reads as the
+    /// offered update, and the list stays on screen while it downloads.
+    fn preview_notice(
+        &self,
+        show_changelog: bool,
+        open_captures: bool,
+    ) -> Option<crate::update_notice::Presentation> {
+        use crate::update_notice::{self as notice, Action, Button, UpdateStatus, ViewState};
+        let installable = self.staging_enabled && self.install_request_enabled;
+        let current_version = self.current_version.clone();
+        let current_display_version = super::display_version(&current_version);
+        let available = |release: &ReleaseInfo| UpdateStatus::Available {
+            current_version: current_version.clone(),
+            current_display_version: current_display_version.clone(),
+            version: release.version.clone(),
+            display_version: super::display_version(&release.version),
+            notes: release.notes.clone(),
+            changelog: release.changelog.clone(),
+            installable,
+            manual_download_url: None,
+            download_size: (release.size > 0).then_some(release.size),
+            will_close_open_captures: open_captures && self.install_request_enabled,
+        };
+        let downloading =
+            |release: &ReleaseInfo, downloaded: u64, total: u64| UpdateStatus::Downloading {
+                current_version: current_version.clone(),
+                current_display_version: current_display_version.clone(),
+                version: release.version.clone(),
+                display_version: super::display_version(&release.version),
+                downloaded,
+                total: (total > 0).then_some(total),
+            };
+        let status = match &self.status {
+            CheckStatus::Idle => return None,
+            CheckStatus::Checking => UpdateStatus::Checking {
+                current_version: current_version.clone(),
+                current_display_version: current_display_version.clone(),
+            },
+            CheckStatus::UpToDate => UpdateStatus::UpToDate {
+                current_version: current_version.clone(),
+                current_display_version: current_display_version.clone(),
+            },
+            CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
+                available(release)
+            }
+            CheckStatus::Downloading {
+                release,
+                downloaded,
+                total,
+            } => downloading(release, *downloaded, *total),
+            // Verification is part of downloading, as on Windows.
+            CheckStatus::Verifying { release } | CheckStatus::Cancelling { release } => {
+                downloading(release, release.size, release.size)
+            }
+            CheckStatus::Error { message } => UpdateStatus::Error {
+                current_version: current_version.clone(),
+                current_display_version: current_display_version.clone(),
+                message: message.clone(),
+                retry_install: false,
+            },
+            CheckStatus::DownloadError { message, .. } => UpdateStatus::Error {
+                current_version: current_version.clone(),
+                current_display_version: current_display_version.clone(),
+                message: super::install_failure_message(message),
+                retry_install: true,
+            },
+        };
+        let mut view = ViewState {
+            show_changelog,
+            ..Default::default()
+        };
+        if let CheckStatus::Downloading { release, .. }
+        | CheckStatus::Verifying { release }
+        | CheckStatus::Cancelling { release }
+        | CheckStatus::DownloadError { release, .. } = &self.status
+        {
+            view.follow(Some(&available(release)), &status);
+        }
+        let mut p = notice::present(Some(&status), &view);
+        if !installable
+            && matches!(status, UpdateStatus::Available { .. })
+            && let Some(footer) = &mut p.footer
+        {
+            // A .deb install updates from captur.es in the browser.
+            footer.primary = Some(Button {
+                label: "Download update".into(),
+                enabled: true,
+                action: Action::OpenDownloadPage,
+                trailing_icon: Some("external-link".into()),
+            });
         }
         Some(p)
     }
@@ -1380,7 +1416,7 @@ mod tests {
             (card.action, card.step),
             ("Check Now", Some(CardStep::Check))
         );
-        // The notice keeps one height from Download to Restart and install.
+        // The notice keeps one height from Update through a verified package.
         worker.enable_install_request();
         for (show_changelog, open_captures) in [(true, false), (false, false), (true, true)] {
             let heights: Vec<f64> = [
@@ -1414,30 +1450,45 @@ mod tests {
         worker.status = CheckStatus::Available {
             release: release.clone(),
         };
-        // The notice names what Download fetches, and warns about open
-        // captures only when some are open.
-        let notice = worker.notice(true, false).unwrap();
+        // One Update downloads, verifies and installs, and the restart note
+        // reads the same whether or not captures are open.
+        let offered = worker.notice(true, false).unwrap();
+        assert_eq!(offered.title, "Captures update available");
+        assert_eq!(offered.description, "Version 2026.11.13.2 · 104 MB");
         assert_eq!(
-            notice.description,
-            "Version 2026.11.13.2 available · 104 MB"
+            offered.version_link.as_ref().unwrap().text,
+            "Version 2026.11.13.2"
         );
-        assert_eq!(notice.version_link.unwrap().text, "2026.11.13.2");
-        assert!(notice.close_warning.is_none());
+        let update = offered.footer.as_ref().unwrap().primary.clone().unwrap();
         assert_eq!(
-            worker.notice(true, true).unwrap().close_warning.as_deref(),
-            Some(
-                "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
-            )
+            (update.label.as_str(), update.action.clone()),
+            ("Update", crate::update_notice::Action::Install)
         );
-        for (open_captures, warned) in [(false, false), (true, true)] {
-            worker.status = CheckStatus::Staged {
-                release: release.clone(),
-                sha256: String::new(),
-            };
-            let staged = worker.notice(true, open_captures).unwrap();
-            assert_eq!(staged.close_warning.is_some(), warned);
-            assert_eq!(staged.description, "Version 2026.11.13.2 verified");
+        for open_captures in [false, true] {
+            assert_eq!(
+                worker
+                    .notice(true, open_captures)
+                    .unwrap()
+                    .footer_note
+                    .as_deref(),
+                Some(crate::update_notice::RESTART_NOTE)
+            );
         }
+        // A verified package is still the offered update: no second card.
+        worker.status = CheckStatus::Staged {
+            release: release.clone(),
+            sha256: String::new(),
+        };
+        assert_eq!(worker.notice(true, true).unwrap(), offered);
+        // The list stays on screen while the update downloads.
+        worker.status = CheckStatus::Downloading {
+            release: release.clone(),
+            downloaded: 1,
+            total: 2,
+        };
+        let downloading = worker.notice(true, false).unwrap();
+        assert_eq!(downloading.notes, offered.notes);
+        assert!(downloading.footer.is_none() && downloading.download.is_some());
         worker.status = CheckStatus::Available {
             release: release.clone(),
         };
@@ -1609,7 +1660,7 @@ mod tests {
         let notice = worker.notice(true, false).unwrap();
         assert_eq!(notice.card_height, available_height, "no jump when staged");
         assert_eq!(notice.title, "Development package verified");
-        assert!(notice.restart.is_none() && notice.close_warning.is_none());
+        assert!(notice.restart.is_none() && notice.footer_note.is_none());
         assert!(
             !serde_json::to_string(&notice)
                 .unwrap()
@@ -1624,11 +1675,11 @@ mod tests {
         let install = worker.presentation().acquisition.unwrap();
         assert!(install.enabled);
         assert_eq!(install.action, crate::update_notice::Action::Install);
-        assert!(worker.notice(true, false).unwrap().close_warning.is_none());
+        assert!(worker.notice(true, false).unwrap().footer_note.is_none());
         let notice = worker.notice(true, true).unwrap();
         assert_eq!(notice.footer.unwrap().primary.unwrap(), install);
         assert_eq!(
-            notice.close_warning.as_deref(),
+            notice.footer_note.as_deref(),
             Some(
                 "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
             )
@@ -2015,7 +2066,7 @@ mod tests {
             Action::Check
         );
         assert!(
-            expanded.close_warning.is_none()
+            expanded.footer_note.is_none()
                 && expanded.download.is_none()
                 && expanded.restart.is_none()
         );

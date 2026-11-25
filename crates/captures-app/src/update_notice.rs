@@ -13,21 +13,27 @@ use serde::{Deserialize, Serialize};
 
 pub const CARD_WIDTH: f64 = 400.0;
 const COMPACT_HEIGHT: f64 = 168.0;
-/// The What's new box's padding, heading and gap before the list.
-const NOTES_CHROME: f64 = 66.0;
+/// An update card's title and version, and the gap below them.
+const UPDATE_HEADER_HEIGHT: f64 = 67.0;
+/// The hairline over the change list, its gaps, and the footer bar's
+/// padding around one row of buttons.
+const NOTES_CHROME: f64 = 85.0;
+/// The footer bar's restart note above its buttons.
+pub const FOOTER_NOTE_HEIGHT: f64 = 40.0;
 /// A plain bullet (about two lines) and its gap.
 const NOTE_HEIGHT: f64 = 44.0;
 /// A highlight: its bold title over a two-line description, and its gap.
 const HIGHLIGHT_HEIGHT: f64 = 66.0;
-/// A stacked version heading.
-const GROUP_HEIGHT: f64 = 28.0;
-/// The stacked intro line.
-const INTRO_HEIGHT: f64 = 30.0;
 /// Past this the notes scroll inside the box.
 const MAX_HEIGHT: f64 = 560.0;
 pub const WARNING_HEIGHT: f64 = 56.0;
 pub const STATUS_HEIGHT: f64 = 56.0;
 const ERROR_HEIGHT: f64 = 96.0;
+
+/// The footer bar's note while an update the app installs itself is offered.
+/// It always shows, so it does not come and go as captures open and close.
+pub const RESTART_NOTE: &str =
+    "Captures restarts to finish. Open captures reopen, unsaved screenshot edits included.";
 
 /// Shipping `openCapturesUpdateWarning`, shown when the update closes open
 /// captures: an update the app installs itself reopens them, while a manual
@@ -121,6 +127,10 @@ pub struct NoteGroup {
     pub version: String,
     pub display_version: String,
     pub items: Vec<NoteItem>,
+    /// In one list of several releases, an older release's version, shown
+    /// as a small link after each of its changes' titles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<VersionLink>,
 }
 
 // ---------------------------------------------------------------- notes ----
@@ -609,6 +619,7 @@ fn stacked_platform_notes(
                     version: entry.version.clone(),
                     display_version: entry.display_version.clone(),
                     items,
+                    tag: None,
                 })
             })
             .collect();
@@ -623,6 +634,7 @@ fn stacked_platform_notes(
         version: String::new(),
         display_version: fallback_display_version.to_owned(),
         items,
+        tag: None,
     }]
 }
 
@@ -664,6 +676,8 @@ pub fn format_update_size(bytes: u64) -> String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Icon {
+    /// No header icon: an update's own cards lead with their title.
+    None,
     App,
     Spinner,
     Check,
@@ -713,7 +727,9 @@ pub struct Button {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Notes {
+    /// The list's accessible name; hosts do not draw it.
     pub heading: String,
+    /// Several releases in one list; older releases' groups carry a `tag`.
     pub stacked: bool,
     pub intro: Option<String>,
     pub groups: Vec<NoteGroup>,
@@ -773,7 +789,8 @@ pub struct Presentation {
     pub restart: Option<Restart>,
     pub error: Option<ErrorBlock>,
     pub status_message: Option<String>,
-    pub close_warning: Option<String>,
+    /// A muted line with the restart icon above the footer bar's buttons.
+    pub footer_note: Option<String>,
     pub footer: Option<Footer>,
     /// Escape and the window close button do nothing while busy.
     pub dismiss_blocked: bool,
@@ -784,8 +801,8 @@ pub struct Presentation {
 }
 
 /// `text` appears once in the description; hosts render it as an external
-/// link to `url`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// link to `url`, with the external-link icon raised after it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VersionLink {
     pub text: String,
     pub url: String,
@@ -801,7 +818,7 @@ pub fn version_link(display_version: &str) -> Option<VersionLink> {
             .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
         && parts[0].len() == 4;
     dated.then(|| VersionLink {
-        text: display_version.to_owned(),
+        text: format!("Version {display_version}"),
         url: format!("https://github.com/joswayski/captures/releases/tag/v{display_version}"),
     })
 }
@@ -819,6 +836,10 @@ pub struct ViewState {
     /// [`ViewState::follow`].
     #[serde(default)]
     pub held_height: f64,
+    /// The offered update's change list, kept on screen while it downloads
+    /// and restarts; see [`ViewState::follow`].
+    #[serde(default)]
+    pub held_notes: Option<Box<Notes>>,
 }
 
 impl ViewState {
@@ -846,6 +867,13 @@ impl ViewState {
         } else {
             0.0
         };
+        self.held_notes = match previous {
+            _ if !proceeding => None,
+            Some(available @ S::Available { .. }) => {
+                notes(Some(available), self.show_changelog).map(Box::new)
+            }
+            _ => self.held_notes.take(),
+        };
     }
 }
 
@@ -863,7 +891,6 @@ pub fn card_height(status: Option<&UpdateStatus>, show_changelog: bool) -> f64 {
             ..
         }) if show_changelog => {
             let groups = stacked_release_notes(changelog, notes.as_deref(), display_version);
-            let stacked = groups.len() > 1;
             let items: f64 = groups
                 .iter()
                 .flat_map(|group| &group.items)
@@ -872,28 +899,99 @@ pub fn card_height(status: Option<&UpdateStatus>, show_changelog: bool) -> f64 {
                     None => NOTE_HEIGHT,
                 })
                 .sum();
-            let headings = if stacked {
-                INTRO_HEIGHT + groups.len() as f64 * GROUP_HEIGHT
-            } else {
-                0.0
-            };
-            NOTES_CHROME + items.max(NOTE_HEIGHT) + headings
+            NOTES_CHROME + items.max(NOTE_HEIGHT)
         }
         _ => 0.0,
     };
-    let warning = match status {
-        Some(UpdateStatus::Available {
-            will_close_open_captures: true,
-            ..
-        }) => WARNING_HEIGHT,
-        _ => 0.0,
-    };
+    if let Some(available @ UpdateStatus::Available { .. }) = status {
+        let note = if footer_note(available).is_some() {
+            FOOTER_NOTE_HEIGHT
+        } else {
+            0.0
+        };
+        let notes = if notes > 0.0 { notes } else { NOTES_CHROME };
+        return (UPDATE_HEADER_HEIGHT + notes + note).min(MAX_HEIGHT);
+    }
+    // Progress takes the footer bar's note and buttons: the same height as
+    // an offered update without its list.
+    if let Some(UpdateStatus::Downloading { .. } | UpdateStatus::Restarting { .. }) = status {
+        return UPDATE_HEADER_HEIGHT + NOTES_CHROME + FOOTER_NOTE_HEIGHT;
+    }
     let body = match status {
-        Some(UpdateStatus::Available { .. }) => 0.0,
         Some(UpdateStatus::Error { .. }) => ERROR_HEIGHT,
         _ => STATUS_HEIGHT,
     };
-    (COMPACT_HEIGHT + notes + warning + body).min(MAX_HEIGHT)
+    (COMPACT_HEIGHT + body).min(MAX_HEIGHT)
+}
+
+/// The footer bar's note for an offered update: what Update does to open
+/// captures. A manual download only mentions them while some are open.
+fn footer_note(status: &UpdateStatus) -> Option<String> {
+    match status {
+        UpdateStatus::Available {
+            installable: true, ..
+        } => Some(RESTART_NOTE.to_owned()),
+        UpdateStatus::Available {
+            will_close_open_captures: true,
+            ..
+        } => Some(open_captures_warning(false).to_owned()),
+        _ => None,
+    }
+}
+
+/// An offered update's change list: one list of every skipped release's
+/// changes, newest first, older releases tagged with their version.
+pub fn notes(status: Option<&UpdateStatus>, show_changelog: bool) -> Option<Notes> {
+    let Some(UpdateStatus::Available {
+        changelog,
+        notes,
+        display_version,
+        ..
+    }) = status
+    else {
+        return None;
+    };
+    if !show_changelog {
+        return None;
+    }
+    let mut groups = stacked_release_notes(changelog, notes.as_deref(), display_version);
+    let stacked = groups.len() > 1;
+    if stacked {
+        for group in groups.iter_mut().skip(1) {
+            group.tag = Some(VersionLink {
+                text: group.display_version.clone(),
+                url: version_link(&group.display_version)
+                    .map(|link| link.url)
+                    .unwrap_or_default(),
+            });
+        }
+    }
+    let other_platforms_only = groups.is_empty()
+        && !stacked_platform_notes(changelog, notes.as_deref(), display_version, None).is_empty();
+    Some(Notes {
+        heading: "Release notes".into(),
+        stacked,
+        intro: None,
+        empty: groups.is_empty().then(|| {
+            if other_platforms_only {
+                format!(
+                    "This update has no highlights for {}.",
+                    NotePlatform::CURRENT.label()
+                )
+            } else {
+                "Release notes aren’t available for this update.".to_owned()
+            }
+        }),
+        empty_link: other_platforms_only
+            .then(|| version_link(display_version))
+            .flatten()
+            .map(|link| VersionLink {
+                text: "See all changes on GitHub".into(),
+                url: link.url,
+            }),
+        group_empty: "Release notes aren’t available for this release.".into(),
+        groups,
+    })
 }
 
 fn button(label: &str, enabled: bool, action: Action) -> Button {
@@ -925,17 +1023,21 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
     };
     let visual_state = if error.is_some() { "error" } else { state };
     let (icon, icon_tone) = match visual_state {
-        "restarting" => (Icon::Check, IconTone::Positive),
         "error" => (Icon::Warning, IconTone::Signal),
-        "downloading" | "checking" | "loading" => (Icon::Spinner, IconTone::Neutral),
-        "available" | "up_to_date" => (Icon::App, IconTone::Accent),
+        "checking" | "loading" => (Icon::Spinner, IconTone::Neutral),
+        // An update's own cards lead with their title, without an icon.
+        "available" | "downloading" | "restarting" => (Icon::None, IconTone::Neutral),
+        "up_to_date" => (Icon::App, IconTone::Accent),
         _ => (Icon::App, IconTone::Neutral),
     };
 
     let (title, description) = match status {
         Some(S::Restarting {
             display_version, ..
-        }) => ("Updated".into(), format!("Version {display_version}")),
+        }) => (
+            "Captures updated".into(),
+            format!("Version {display_version}"),
+        ),
         Some(S::Downloading {
             display_version, ..
         }) => (
@@ -957,7 +1059,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
                 .map(|size| format!(" · {}", format_update_size(size)))
                 .unwrap_or_default();
             (
-                "Update available".into(),
+                "Captures update available".into(),
                 format!("Version {display_version}{size}"),
             )
         }
@@ -979,45 +1081,12 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
     };
 
     // Preferences (`show_update_changelog`) is the only way to hide notes.
-    let notes_visible = available && error.is_none() && view.show_changelog;
+    // Preferences (`show_update_changelog`) is the only way to hide notes.
+    // The offered list stays on screen while that update downloads and restarts.
     let notes = match status {
-        Some(S::Available {
-            changelog,
-            notes,
-            display_version,
-            ..
-        }) if notes_visible => {
-            let groups = stacked_release_notes(changelog, notes.as_deref(), display_version);
-            let stacked = groups.len() > 1;
-            let other_platforms_only = groups.is_empty()
-                && !stacked_platform_notes(changelog, notes.as_deref(), display_version, None)
-                    .is_empty();
-            Some(Notes {
-                heading: "What’s new".into(),
-                stacked,
-                intro: stacked
-                    .then(|| "This update includes all of the following changes:".to_owned()),
-                empty: groups.is_empty().then(|| {
-                    if other_platforms_only {
-                        format!(
-                            "This update has no highlights for {}.",
-                            NotePlatform::CURRENT.label()
-                        )
-                    } else {
-                        "Release notes aren’t available for this update.".to_owned()
-                    }
-                }),
-                empty_link: other_platforms_only
-                    .then(|| version_link(display_version))
-                    .flatten()
-                    .map(|link| VersionLink {
-                        text: "See all changes on GitHub".into(),
-                        url: link.url,
-                    }),
-                group_empty: "Release notes aren’t available for this release.".into(),
-                groups,
-            })
-        }
+        _ if error.is_some() => None,
+        Some(S::Available { .. }) => notes(status, view.show_changelog),
+        Some(S::Downloading { .. } | S::Restarting { .. }) => view.held_notes.as_deref().cloned(),
         _ => None,
     };
 
@@ -1057,7 +1126,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         Some(S::Restarting {
             seconds_remaining, ..
         }) => Some(Restart {
-            message: format!("Reopening in {seconds_remaining} seconds…"),
+            message: format!("Restarting in {seconds_remaining}…"),
             seconds_remaining: *seconds_remaining,
         }),
         _ => None,
@@ -1081,12 +1150,8 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
             }
         });
 
-    let close_warning = match status {
-        Some(S::Available {
-            will_close_open_captures: true,
-            installable,
-            ..
-        }) if error.is_none() => Some(open_captures_warning(*installable).to_owned()),
+    let footer_note = match status {
+        Some(available @ S::Available { .. }) if error.is_none() => footer_note(available),
         _ => None,
     };
 
@@ -1101,7 +1166,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
                 })
             );
             Some(if installable {
-                button("Update now", enabled, Action::Install)
+                button("Update", enabled, Action::Install)
             } else {
                 // Opens the release page in the browser.
                 Button {
@@ -1153,7 +1218,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         restart,
         error: error_block,
         status_message,
-        close_warning,
+        footer_note,
         footer,
         dismiss_blocked: downloading || restarting || view.installing,
         version_link: match status {
@@ -1695,7 +1760,9 @@ mod tests {
         };
         assert_eq!(
             card_height(Some(&status), true),
-            168.0 + 66.0 + 66.0 + 2.0 * 44.0
+            // Header, list chrome and footer bar, a highlight, two bullets,
+            // the restart note.
+            67.0 + 85.0 + 66.0 + 2.0 * 44.0 + 40.0
         );
         assert_eq!(version_link("0.1.0"), None);
         assert_eq!(version_link("2026.11.2202"), None);
@@ -1814,21 +1881,26 @@ mod tests {
     }
 
     #[test]
-    fn available_shows_stacked_notes_and_update_now() {
+    fn available_shows_one_list_and_update() {
         let status = fixture("available").unwrap();
         let p = present(Some(&status), &view(true));
         assert_eq!(p.visual_state, "available");
-        assert_eq!(p.title, "Update available");
+        assert_eq!(p.title, "Captures update available");
         assert_eq!(p.description, "Version 2026.08.27.5 · 12.6 MB");
-        assert_eq!(p.icon, Icon::App);
-        assert_eq!(p.icon_tone, IconTone::Accent);
+        assert_eq!(p.icon, Icon::None);
         let notes = p.notes.unwrap();
         assert!(notes.stacked);
-        assert_eq!(
-            notes.intro.as_deref(),
-            Some("This update includes all of the following changes:")
-        );
+        assert!(notes.intro.is_none());
         assert_eq!(notes.groups.len(), 2);
+        // The newest release is untagged; an older one links its own release.
+        assert!(notes.groups[0].tag.is_none());
+        assert_eq!(
+            notes.groups[1].tag,
+            Some(VersionLink {
+                text: "2026.08.27.3".into(),
+                url: "https://github.com/joswayski/captures/releases/tag/v2026.08.27.3".into(),
+            })
+        );
         assert_eq!(
             notes.groups[0].items,
             vec![item(
@@ -1838,21 +1910,21 @@ mod tests {
         );
         let footer = p.footer.unwrap();
         assert_eq!(footer.dismiss.label, "Not now");
-        let update_now = footer.primary.unwrap();
-        assert_eq!(update_now.label, "Update now");
-        assert!(update_now.trailing_icon.is_none());
-        assert!(p.close_warning.is_none());
+        let update = footer.primary.unwrap();
+        assert_eq!(update.label, "Update");
+        assert_eq!(update.action, Action::Install);
+        assert!(update.trailing_icon.is_none());
+        // Shown with nothing open, so it does not come and go with an editor.
+        assert_eq!(p.footer_note.as_deref(), Some(RESTART_NOTE));
         assert!(!p.dismiss_blocked);
-        // Card, notes chrome, two bullets, the intro and two version headings.
-        assert_eq!(p.card_height, 168.0 + 66.0 + 2.0 * 44.0 + 30.0 + 2.0 * 28.0);
+        // Header, list chrome and footer bar, two bullets, the restart note.
+        assert_eq!(p.card_height, 67.0 + 85.0 + 2.0 * 44.0 + 40.0);
         let link = p.version_link.unwrap();
-        assert!(p.description.contains(&link.text));
+        assert_eq!(link.text, "Version 2026.08.27.5");
+        assert!(p.description.starts_with(&link.text));
         assert_eq!(
             link.url,
-            format!(
-                "https://github.com/joswayski/captures/releases/tag/v{}",
-                link.text
-            )
+            "https://github.com/joswayski/captures/releases/tag/v2026.08.27.5"
         );
     }
 
@@ -1861,21 +1933,20 @@ mod tests {
         let status = fixture("closing").unwrap();
         let p = present(Some(&status), &view(false));
         assert!(p.notes.is_none());
-        assert_eq!(
-            p.close_warning.as_deref(),
-            Some(
-                "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
-            )
-        );
-        assert_eq!(p.card_height, 168.0 + 56.0);
+        // Open captures change nothing: the same restart note shows.
+        assert_eq!(p.footer_note.as_deref(), Some(RESTART_NOTE));
+        assert_eq!(p.card_height, 67.0 + 85.0 + 40.0);
         let shown = present(Some(&status), &view(true));
-        assert_eq!(shown.card_height, 168.0 + 66.0 + 88.0 + 30.0 + 56.0 + 56.0);
+        assert_eq!(shown.card_height, 67.0 + 85.0 + 88.0 + 40.0);
         let single = present(fixture("single").as_ref(), &view(true));
-        assert!(!single.notes.as_ref().unwrap().stacked);
-        assert!(single.notes.unwrap().intro.is_none());
-        assert_eq!(single.card_height, 168.0 + 66.0 + 44.0);
+        let notes = single.notes.as_ref().unwrap();
+        assert!(!notes.stacked);
+        assert!(notes.groups.iter().all(|group| group.tag.is_none()));
+        assert_eq!(single.card_height, 67.0 + 85.0 + 44.0 + 40.0);
         let manual = present(fixture("manual").as_ref(), &view(true));
         assert_eq!(manual.description, "Version 2026.08.27.5");
+        // Nothing open and nothing restarts: no note.
+        assert!(manual.footer_note.is_none());
         // It opens the release page, so it carries the trailing link icon.
         let view_release = manual.footer.unwrap().primary.unwrap();
         assert_eq!(view_release.label, "View release");
@@ -1888,7 +1959,7 @@ mod tests {
         let p = present(Some(&status), &view(true));
         assert_eq!(p.footer.unwrap().primary.unwrap().label, "View release");
         assert_eq!(
-            p.close_warning.as_deref(),
+            p.footer_note.as_deref(),
             Some("Open captures will close. Unsaved edits are kept as drafts.")
         );
         // Shipping hides it while an action error shows.
@@ -1896,40 +1967,44 @@ mod tests {
             action_error: Some("GitHub is unavailable".into()),
             ..view(true)
         };
-        assert!(present(Some(&status), &failed).close_warning.is_none());
+        assert!(present(Some(&status), &failed).footer_note.is_none());
     }
 
     #[test]
-    fn one_update_keeps_its_card_height_until_a_new_check() {
+    fn one_update_keeps_its_card_and_list_until_a_new_check() {
         let available = fixture("available").unwrap();
-        let tall = present(Some(&available), &view(true)).card_height;
+        let offered = present(Some(&available), &view(true));
         let mut view = view(true);
         let mut previous = available;
         for name in ["downloading", "restarting"] {
             let next = fixture(name).unwrap();
             view.follow(Some(&previous), &next);
             let p = present(Some(&next), &view);
-            assert_eq!(p.card_height, tall, "{name}");
+            assert_eq!(p.card_height, offered.card_height, "{name}");
+            assert_eq!(p.notes, offered.notes, "{name}");
             assert!(p.card_height > card_height(Some(&next), true));
             previous = next;
         }
         let checking = fixture("checking").unwrap();
         view.follow(Some(&previous), &checking);
-        assert_eq!(present(Some(&checking), &view).card_height, 224.0);
+        let p = present(Some(&checking), &view);
+        assert_eq!(p.card_height, 224.0);
+        assert!(p.notes.is_none());
     }
 
     #[test]
     fn downloading_and_restarting_block_dismissal_and_hide_the_footer() {
         let p = present(fixture("downloading").as_ref(), &view(true));
         assert_eq!(p.title, "Updating Captures");
-        assert_eq!(p.icon, Icon::Spinner);
+        assert_eq!(p.icon, Icon::None);
         let download = p.download.unwrap();
         assert_eq!(download.detail, "7.3 MB / 12.6 MB");
         assert_eq!(download.percent, Some(58));
         assert_eq!(download.percent_label.as_deref(), Some("58%"));
         assert!(p.footer.is_none());
         assert!(p.dismiss_blocked);
-        assert_eq!(p.card_height, 224.0);
+        // As tall as the offered card without its list, so nothing jumps.
+        assert_eq!(p.card_height, 67.0 + 85.0 + 40.0);
 
         let unknown = UpdateStatus::Downloading {
             current_version: "a".into(),
@@ -1944,11 +2019,10 @@ mod tests {
         assert_eq!(download.percent, None);
 
         let p = present(fixture("restarting").as_ref(), &view(true));
-        assert_eq!(p.title, "Updated");
+        assert_eq!(p.title, "Captures updated");
         assert_eq!(p.description, "Version 2026.08.27.5");
-        assert_eq!(p.icon, Icon::Check);
-        assert_eq!(p.icon_tone, IconTone::Positive);
-        assert_eq!(p.restart.unwrap().message, "Reopening in 3 seconds…");
+        assert_eq!(p.icon, Icon::None);
+        assert_eq!(p.restart.unwrap().message, "Restarting in 3…");
         assert!(p.footer.is_none());
         assert!(p.dismiss_blocked);
     }
@@ -2070,7 +2144,7 @@ mod tests {
         status = stub_next(&status, StubEvent::Tick).unwrap();
         assert_eq!(
             present(Some(&status), &view(true)).restart.unwrap().message,
-            "Reopening in 1 seconds…"
+            "Restarting in 1…"
         );
         assert_eq!(stub_next(&status, StubEvent::Tick), None);
 

@@ -2461,7 +2461,7 @@ def recording_ready(binary, scratch):
 
 def notices(binary, scratch):
     """The update notice on shipping's fixtures over AT-SPI: the notes have no
-    Hide or What's new toggle (Preferences owns that setting); Update now
+    Hide or What's new toggle (Preferences owns that setting); Update
     downloads, reaches the restart state and closes (the shared stub never
     installs anything); an error's Close dismisses it."""
     settings = scratch / "notice-settings.json"
@@ -2475,17 +2475,19 @@ def notices(binary, scratch):
                      "--settings-file", str(settings))
     try:
         app = wait(lambda: application(process.pid), "the app on the accessibility bus")
-        dialog = wait(lambda: find(app, "dialog", "Update available"), "the update notice")[0]
+        dialog = wait(lambda: find(app, "dialog", "Captures update available"), "the update notice")[0]
         assert_accessible(dialog, "update notice")
         # Pull requests are real buttons inside the note text.
         wait(lambda: find(dialog, "push button", "Open pull request 265"),
              "the pull request button in the notes")
         assert not find(app, "push button", "Hide"), "the notes kept a Hide toggle"
         assert not find(app, "push button", "What’s new"), "the notice kept What's new"
-        press(find(app, "push button", "Update now")[0])
+        # An older release's change links that release.
+        assert find(dialog, "link", "2026.08.27.3"), "no older release tag"
+        press(find(app, "push button", "Update")[0])
         wait(lambda: [n for n, (role, _) in nodes(app) if role == "progress bar"],
              "download progress")
-        wait(lambda: find(app, "dialog", "Updated"), "the restart state", timeout=15)
+        wait(lambda: find(app, "dialog", "Captures updated"), "the restart state", timeout=15)
         assert process.wait(timeout=10) == 0, "the notice did not close after the restart"
     finally:
         if process.poll() is None:
@@ -2513,7 +2515,7 @@ def update_notice_live(binary, scratch):
     """The live update notice on a development build's scripted update
     source (`--update-script retry`): the launch check opens the notice
     once, Later dismisses it, the tray's Check for Updates shows it again with the update in
-    hand, Update now downloads in place, a failed verification offers Try
+    hand, Update downloads in place, a failed verification offers Try
     again (an install retry), and the retry verifies, installs and quits
     with the notice closed."""
     root = scratch / "update-live-history"
@@ -2538,13 +2540,13 @@ def update_notice_live(binary, scratch):
     try:
         wait(lambda: events("tray"), "the tray")
         app = wait(lambda: application(process.pid), "the app on the accessibility bus")
-        dialog = wait(lambda: find(app, "dialog", "Update available"), "the live notice")[0]
+        dialog = wait(lambda: find(app, "dialog", "Captures update available"), "the live notice")[0]
         assert_accessible(dialog, "live update notice")
         assert find(dialog, "push button", "Open pull request 612"), "no pull request button"
-        assert [e["title"] for e in events("update-notice")] == ["Update available"]
+        assert [e["title"] for e in events("update-notice")] == ["Captures update available"]
         press(find(dialog, "push button", "Not now")[0])
         wait(lambda: events("update-notice-dismissed"), "Not now")
-        wait(lambda: not find(app, "dialog", "Update available"), "the notice to close")
+        wait(lambda: not find(app, "dialog", "Captures update available"), "the notice to close")
         # The tray pins the update in hand above New Capture, as shipping's
         # `tray_update_item`, and reopens the notice without rechecking.
         service = wait(lambda: [json.loads(line) for line in FIXTURE_LOG.read_text().splitlines()
@@ -2556,9 +2558,9 @@ def update_notice_live(binary, scratch):
                               ("New Capture…", True)], rows
         assert "Check for Updates…" not in [label for label, _ in labels], rows
         click("Update Available — 2 changes")
-        dialog = wait(lambda: find(app, "dialog", "Update available"), "the tray's notice")[0]
+        dialog = wait(lambda: find(app, "dialog", "Captures update available"), "the tray's notice")[0]
         assert not [e for e in events("update-action") if e["step"] == "Check"], "the tray rechecked"
-        press(find(dialog, "push button", "Update now")[0])
+        press(find(dialog, "push button", "Update")[0])
         wait(lambda: find(app, "dialog", "Updating Captures"), "the download in place")
         wait(lambda: ("Installing Update…", False) in
              [(label, on) for _, label, on in tray_menu(service)[0]], "the tray's installing row")

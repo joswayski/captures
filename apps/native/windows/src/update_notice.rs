@@ -1246,6 +1246,79 @@ struct NoteLine {
     title: Option<Text>,
     text: Text,
     link: Option<(DWRITE_TEXT_RANGE, u64, String)>,
+    /// An older release's version after the title (or text): its text and
+    /// widened-arrow ranges and its release URL.
+    tag: Option<Tag>,
+}
+
+struct Tag {
+    text: DWRITE_TEXT_RANGE,
+    arrow: DWRITE_TEXT_RANGE,
+    name: String,
+    url: String,
+}
+
+/// `copy` with `tag` and a ↗ (widened to hold the raised link icon) after it.
+fn tag_copy(copy: &str, tag: &notice::VersionLink) -> (String, Tag) {
+    let tagged = format!("{copy} {}\u{2197}", tag.text);
+    let at = copy.len() + 1;
+    let tag = Tag {
+        text: utf16_range(&tagged, at, tag.text.len()),
+        arrow: utf16_range(&tagged, at + tag.text.len(), '\u{2197}'.len_utf8()),
+        name: tag.text.clone(),
+        url: tag.url.clone(),
+    };
+    (tagged, tag)
+}
+
+/// The tag's small regular face, and the 11-DIP gap and icon in its arrow.
+fn style_tag(text: &mut Text, tag: &Tag, size: f32) -> Result<()> {
+    let both = DWRITE_TEXT_RANGE {
+        startPosition: tag.text.startPosition,
+        length: tag.text.length + tag.arrow.length,
+    };
+    unsafe {
+        text.layout.SetFontSize(size, both)?;
+        text.layout.SetFontWeight(DWRITE_FONT_WEIGHT_NORMAL, both)?;
+        let layout: IDWriteTextLayout1 = text.layout.cast()?;
+        layout.SetCharacterSpacing(0., 0., 11., tag.arrow)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        text.layout.GetMetrics(&mut metrics)?;
+        (text.width, text.height) = (metrics.width, metrics.height);
+    }
+    Ok(())
+}
+
+/// Colour a tag (underlined on hover), hide its ↗ and draw the raised
+/// link icon at its top right instead.
+fn paint_tag(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    text: &Text,
+    tag: &Tag,
+    (x, y): (f32, f32),
+    (color, hovered): (D2D1_COLOR_F, bool),
+) -> Result<()> {
+    unsafe {
+        let brush: IUnknown = gfx::brush(dc, color)?.cast()?;
+        text.layout.SetDrawingEffect(&brush, tag.text)?;
+        let clear: IUnknown = gfx::brush(dc, D2D1_COLOR_F::default())?.cast()?;
+        text.layout.SetDrawingEffect(&clear, tag.arrow)?;
+        text.layout.SetUnderline(hovered, tag.text)?;
+    }
+    if let Some(b) = range_rects(text, tag.text).last() {
+        let b = offset(*b, x, y);
+        gfx::icon(
+            dc,
+            &g.factory,
+            "release-link",
+            &[],
+            (b.right + 2., b.top + 1., 9.),
+            2.,
+            color,
+        )?;
+    }
+    Ok(())
 }
 
 /// One `.update-notes-group`: its optional `h3` and items.
@@ -1268,6 +1341,9 @@ pub fn paint(
     let c = |name: &str| t.color(name);
     let (s3, s4, s5, s6) = (n("s-3"), n("s-4"), n("s-5"), n("s-6"));
     let (sm, xxs) = (n("text-sm"), n("text-2xs"));
+    // An update's own cards: no icon, one list under a hairline, and a
+    // darker footer bar holding the restart note, progress and buttons.
+    let update = p.icon == Icon::None;
     let s1 = n("s-1");
     // A highlight: its title, `s-1`, then its description. Highlights sit
     // `s-4` from their neighbours, plain bullets `s-3`.
@@ -1327,7 +1403,7 @@ pub fn paint(
 
     // ---- measure ----
     // `.update-notice-header`: 36 px icon and copy.
-    let copy_width = inner - 36. - s4;
+    let copy_width = if update { inner } else { inner - 36. - s4 };
     let title = para(
         g,
         t,
@@ -1337,9 +1413,11 @@ pub fn paint(
         Some(tight),
         copy_width,
     )?;
-    // The version link: its text, then a ↗ widened to 16 DIPs holding the
-    // place of Caper's external-link icon (`release-link`): a 4-DIP gap and
-    // the 12-DIP icon drawn over it.
+    // The version link: its text, then a ↗ widened to hold the place of
+    // Caper's external-link icon (`release-link`): a 4-DIP gap and the
+    // centred 12-DIP icon, or on an update's card a 2-DIP gap and a 10-DIP
+    // icon raised to the text's top right.
+    let (link_gap, link_side) = if update { (2f32, 10f32) } else { (4., 12.) };
     let link = p.version_link.as_ref().and_then(|link| {
         let at = p.description.find(&link.text)?;
         Some((at, at + link.text.len(), link))
@@ -1371,14 +1449,18 @@ pub fn paint(
         unsafe {
             let layout: IDWriteTextLayout1 = description.layout.cast()?;
             // Exactly the gap and icon, whatever the font's ↗ measures.
-            layout.SetCharacterSpacing(0., 0., 16., *arrow)?;
+            layout.SetCharacterSpacing(0., 0., link_gap + link_side, *arrow)?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             description.layout.GetMetrics(&mut metrics)?;
             (description.width, description.height) = (metrics.width, metrics.height);
         }
     }
     let copy_height = title.height + 2. + description.height;
-    let header_content = copy_height.max(36.);
+    let header_content = if update {
+        copy_height
+    } else {
+        copy_height.max(36.)
+    };
     let header = s6 + header_content + s5;
 
     // `.update-notice-body` blocks at the inner width.
@@ -1426,8 +1508,9 @@ pub fn paint(
             // `.update-notes-scroll { padding-right: var(--s-1) }`.
             let list = boxed - if notes.stacked { n("s-1") } else { 0. };
             let mut groups = Vec::new();
+            let list = if update { inner } else { list };
             for group in &notes.groups {
-                let heading = if notes.stacked {
+                let heading = if notes.stacked && !update {
                     Some(para(
                         g,
                         t,
@@ -1442,6 +1525,7 @@ pub fn paint(
                 };
                 let mut items = Vec::new();
                 for item in &group.items {
+                    let tag_on_title = item.title.is_some();
                     let (copy, link) = match &item.pull_request {
                         Some(pull) => {
                             let label = format!("#{}", pull.number);
@@ -1451,7 +1535,14 @@ pub fn paint(
                         }
                         None => (item.text.clone(), None),
                     };
-                    let text = para(
+                    let (copy, mut tag) = match &group.tag {
+                        Some(version) if !tag_on_title => {
+                            let (copy, tag) = tag_copy(&copy, version);
+                            (copy, Some(tag))
+                        }
+                        _ => (copy, None),
+                    };
+                    let mut text = para(
                         g,
                         t,
                         &copy,
@@ -1460,19 +1551,41 @@ pub fn paint(
                         Some(snug),
                         list - s5,
                     )?;
+                    if let Some(tag) = &tag {
+                        style_tag(&mut text, tag, n("text-xs"))?;
+                    }
                     let title = match &item.title {
-                        Some(title) => Some(para(
-                            g,
-                            t,
-                            title,
-                            (sm, "weight-semibold"),
-                            None,
-                            Some(snug),
-                            list - s5,
-                        )?),
+                        Some(title) => {
+                            let (copy, title_tag) = match &group.tag {
+                                Some(version) => {
+                                    let (copy, tag) = tag_copy(title, version);
+                                    (copy, Some(tag))
+                                }
+                                None => (title.clone(), None),
+                            };
+                            let mut text = para(
+                                g,
+                                t,
+                                &copy,
+                                (sm, "weight-semibold"),
+                                None,
+                                Some(snug),
+                                list - s5,
+                            )?;
+                            if let Some(title_tag) = title_tag {
+                                style_tag(&mut text, &title_tag, n("text-xs"))?;
+                                tag = Some(title_tag);
+                            }
+                            Some(text)
+                        }
                         None => None,
                     };
-                    items.push(NoteLine { title, text, link });
+                    items.push(NoteLine {
+                        title,
+                        text,
+                        link,
+                        tag,
+                    });
                 }
                 let empty = if group.items.is_empty() {
                     Some(para(
@@ -1590,10 +1703,10 @@ pub fn paint(
     let sunken = |content: f32| content + 2. * (s5 + 1.);
     let bar = 4.;
     let mut body_natural = 0.;
-    if let Some((_, label, ..)) = &download {
+    if let Some((_, label, ..)) = download.as_ref().filter(|_| !update) {
         body_natural += sunken(label.height + s4 + bar);
     }
-    if let Some(message) = &restart {
+    if let Some(message) = restart.as_ref().filter(|_| !update) {
         body_natural += sunken(message.height + bar);
     }
     if let Some((message, fallback, ..)) = &error {
@@ -1605,28 +1718,41 @@ pub fn paint(
     let has_body = notes.is_some() || body_natural > 0.;
     let body_natural = if has_body { body_natural + s4 } else { 0. };
 
-    // `.update-close-warning`: icon 16 beside wrapped copy.
-    let warning = match &p.close_warning {
-        Some(warning) => Some((
-            warning,
+    // The footer bar's note: the 12-DIP restart icon beside wrapped copy.
+    let note = match &p.footer_note {
+        Some(note) => Some((
+            note,
             para(
                 g,
                 t,
-                warning,
+                note,
                 (sm, "weight-regular"),
                 None,
                 Some(snug),
-                inner - 2. - 2. * s4 - 16. - s3,
+                inner - 12. - s3,
             )?,
         )),
         None => None,
     };
-    let warning_natural = warning
-        .as_ref()
-        .map_or(0., |(_, text)| text.height.max(17.) + 2. * s3 + 2. + s3);
 
     // `.update-notice-footer`: Later/Close, then the primary.
-    let footer_natural = if p.footer.is_some() {
+    let footer_natural = if update {
+        // The footer bar: note, progress or buttons, between its padding.
+        let mut h = s5 + s6;
+        if let Some((_, text)) = &note {
+            h += text.height + s4;
+        }
+        if p.footer.is_some() {
+            h += n("h-md");
+        }
+        if let Some((_, label, ..)) = &download {
+            h += label.height + s4 + bar;
+        }
+        if let Some(message) = &restart {
+            h += message.height + s4 + bar;
+        }
+        h
+    } else if p.footer.is_some() {
         56f32.max(s4 + n("h-md") + s6)
     } else {
         0.
@@ -1638,63 +1764,84 @@ pub fn paint(
     // takes it, so the header stays put while an update's card holds its
     // Available height (`ViewState::follow`).
     let content = bottom - top;
-    let (header_h, body_h, warning_h, footer_h) =
-        if notes.is_some() || download.is_some() || restart.is_some() {
-            let body = (content - header - warning_natural - footer_natural).max(0.);
-            (header, body, warning_natural, footer_natural)
+    let (header_h, body_h, footer_h) =
+        if update || notes.is_some() || download.is_some() || restart.is_some() {
+            let body = (content - header - footer_natural).max(0.);
+            (header, body, footer_natural)
         } else {
-            let used = header + body_natural + warning_natural + footer_natural;
-            let extra = (content - used).max(0.) / 4.;
+            let used = header + body_natural + footer_natural;
+            let extra = (content - used).max(0.) / 3.;
             let grow = |h: f32, present: bool| if present { h + extra } else { h };
             (
                 header + extra,
                 grow(body_natural, has_body),
-                grow(warning_natural, warning.is_some()),
                 grow(footer_natural, p.footer.is_some()),
             )
         };
+    let bar_top = top + header_h + body_h;
+    if update {
+        // The bar's sunken fill follows the card's bottom corners.
+        let fill = rect(left, bar_top, right, bottom);
+        unsafe { dc.PushAxisAlignedClip(&fill, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let filled = gfx::fill_round(
+            dc,
+            rect(left, top, right, bottom),
+            radius - 1.,
+            c("surface-sunken"),
+        );
+        unsafe { dc.PopAxisAlignedClip() };
+        filled?;
+        gfx::fill(
+            dc,
+            rect(left, bar_top, right, bar_top + 1.),
+            c("border-subtle"),
+        )?;
+    }
 
     // ---- header ----
     let y0 = top;
     let mid = y0 + s6 + (header_h - s6 - s5) / 2.;
     let icon = rect(left + s6, mid - 18., left + s6 + 36., mid + 18.);
-    let (fill, ink) = match p.icon_tone {
-        IconTone::Accent => ("theme-accent", "theme-accent-ink"),
-        IconTone::Positive => ("positive", "positive-ink"),
-        IconTone::Signal => ("theme-signal", "theme-signal-ink"),
-        IconTone::Neutral => ("surface-sunken", "text"),
-    };
-    gfx::fill_round(dc, icon, n("r-lg"), c(fill))?;
-    if p.icon_tone == IconTone::Neutral {
-        gfx::border(dc, icon, n("r-lg"), 1., c("border"))?;
-    }
-    let (cx, cy) = (icon.left + 18., mid);
-    match p.icon {
-        Icon::Spinner => spinner(
-            dc,
-            g,
-            (cx, cy, 6.),
-            ui.time * std::f32::consts::TAU / 0.72,
-            c(ink),
-        )?,
-        icon => {
-            let (name, filled): (&str, &[usize]) = match icon {
-                Icon::Check => ("check", &[]),
-                Icon::Warning => ("warning", &[]),
-                _ => ("capture", &[1]),
-            };
-            gfx::icon(
+    if !update {
+        let (fill, ink) = match p.icon_tone {
+            IconTone::Accent => ("theme-accent", "theme-accent-ink"),
+            IconTone::Positive => ("positive", "positive-ink"),
+            IconTone::Signal => ("theme-signal", "theme-signal-ink"),
+            IconTone::Neutral => ("surface-sunken", "text"),
+        };
+        gfx::fill_round(dc, icon, n("r-lg"), c(fill))?;
+        if p.icon_tone == IconTone::Neutral {
+            gfx::border(dc, icon, n("r-lg"), 1., c("border"))?;
+        }
+        let (cx, cy) = (icon.left + 18., mid);
+        match p.icon {
+            Icon::None => {}
+            Icon::Spinner => spinner(
                 dc,
-                &g.factory,
-                name,
-                filled,
-                (cx - 9., cy - 9., 18.),
-                1.8,
+                g,
+                (cx, cy, 6.),
+                ui.time * std::f32::consts::TAU / 0.72,
                 c(ink),
-            )?;
+            )?,
+            icon => {
+                let (name, filled): (&str, &[usize]) = match icon {
+                    Icon::Check => ("check", &[]),
+                    Icon::Warning => ("warning", &[]),
+                    _ => ("capture", &[1]),
+                };
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    name,
+                    filled,
+                    (cx - 9., cy - 9., 18.),
+                    1.8,
+                    c(ink),
+                )?;
+            }
         }
     }
-    let copy_x = icon.right + s4;
+    let copy_x = if update { left + s6 } else { icon.right + s4 };
     let copy_y = mid - copy_height / 2.;
     gfx::text(dc, &title, copy_x, copy_y, c("text"))?;
     let desc_y = copy_y + title.height + 2.;
@@ -1709,11 +1856,17 @@ pub fn paint(
             let clear: IUnknown = gfx::brush(dc, D2D1_COLOR_F::default())?.cast()?;
             description.layout.SetDrawingEffect(&clear, *arrow)?;
         }
-        // Caper's 12-DIP icon, 4 DIPs after the version's last line.
+        // Caper's icon after the version's last line: centred, or raised to
+        // its top right on an update's card.
         if let Some(b) = range_rects(&description, *text_range).last() {
             let b = offset(*b, copy_x, desc_y);
-            let side = 12f32.min(b.bottom - b.top);
-            let (x, y) = (b.right + 4., (b.top + b.bottom - side) / 2.);
+            let side = link_side.min(b.bottom - b.top);
+            let y = if update {
+                b.top + 1.
+            } else {
+                (b.top + b.bottom - side) / 2.
+            };
+            let x = b.right + link_gap;
             gfx::icon(dc, &g.factory, "release-link", &[], (x, y, side), 2., color)?;
         }
         if ui.link > 0. {
@@ -1774,27 +1927,34 @@ pub fn paint(
     let mut scroll_max = 0.;
     let mut notes_view = None;
     if let Some((notes, heading, intro, empty, groups)) = &notes {
-        let section = rect(bx0, y, bx1, body_top + body_h - s4);
-        gfx::fill_round(dc, section, n("r-lg"), c("surface-sunken"))?;
-        gfx::border(dc, section, n("r-lg"), 1., c("border-subtle"))?;
-        let ix = bx0 + 1. + s5;
-        let mut iy = y + 1. + s5;
-        let row = heading.height;
-        gfx::text(
-            dc,
-            heading,
-            ix,
-            iy + (row - heading.height) / 2.,
-            c("text-subtle"),
-        )?;
-        part(
-            Role::Heading(2),
-            &notes.heading,
-            rect(ix, iy, ix + heading.width, iy + row),
-            None,
-            true,
-        );
-        iy += row + s4;
+        let (section, ix, mut iy) = if update {
+            // One list under a hairline, straight on the card.
+            let section = rect(bx0 - 1. - s5, y, bx1 + 1. + s5, body_top + body_h);
+            gfx::fill(dc, rect(bx0, y, bx1, y + 1.), c("border-subtle"))?;
+            (section, bx0, y + 1. + s5)
+        } else {
+            let section = rect(bx0, y, bx1, body_top + body_h - s4);
+            gfx::fill_round(dc, section, n("r-lg"), c("surface-sunken"))?;
+            gfx::border(dc, section, n("r-lg"), 1., c("border-subtle"))?;
+            let ix = bx0 + 1. + s5;
+            let iy = y + 1. + s5;
+            let row = heading.height;
+            gfx::text(
+                dc,
+                heading,
+                ix,
+                iy + (row - heading.height) / 2.,
+                c("text-subtle"),
+            )?;
+            part(
+                Role::Heading(2),
+                &notes.heading,
+                rect(ix, iy, ix + heading.width, iy + row),
+                None,
+                true,
+            );
+            (section, ix, iy + row + s4)
+        };
         if let Some(intro) = intro {
             gfx::text(dc, intro, ix, iy, c("text-subtle"))?;
             part(
@@ -1895,7 +2055,45 @@ pub fn paint(
                         c("text-faint"),
                     ));
                     let x = view.left + s5;
+                    // An older release's version tag, on its title or text.
+                    macro_rules! tagged {
+                        ($text:expr, $y:expr) => {
+                            if let Some(tag) = &item.tag {
+                                let all = DWRITE_TEXT_RANGE {
+                                    startPosition: tag.text.startPosition,
+                                    length: tag.text.length + tag.arrow.length,
+                                };
+                                let hit = union(
+                                    range_rects($text, all)
+                                        .into_iter()
+                                        .map(|b| offset(b, x, $y)),
+                                )
+                                .filter(|hit| visible(*hit));
+                                let hover = hit.is_some_and(|hit| {
+                                    hovered(part(
+                                        Role::Link,
+                                        &format!("Open release {}", tag.name),
+                                        hit,
+                                        Some(Action::OpenPullRequest {
+                                            url: tag.url.clone(),
+                                        }),
+                                        true,
+                                    ))
+                                });
+                                let color = c(if hover { "text" } else { "text-faint" });
+                                result = result.and(paint_tag(
+                                    dc,
+                                    g,
+                                    $text,
+                                    tag,
+                                    (x, $y),
+                                    (color, hover),
+                                ));
+                            }
+                        };
+                    }
                     if let (Some(title), Some(copy)) = (&item.title, &note.title) {
+                        tagged!(title, gy);
                         result = result.and(gfx::text(dc, title, x, gy, c("text")));
                         let r = rect(x, gy, x + title.width, gy + title.height);
                         if visible(r) {
@@ -1906,6 +2104,9 @@ pub fn paint(
                     let r = rect(x, gy, x + item.text.width, gy + item.text.height);
                     if visible(r) {
                         part(Role::Text, &note.text, r, None, true);
+                    }
+                    if item.title.is_none() {
+                        tagged!(&item.text, gy);
                     }
                     match &item.link {
                         Some((range, number, url)) => {
@@ -1963,11 +2164,46 @@ pub fn paint(
         gfx::border(dc, r, n("r-lg"), 1., c("border-subtle"))?;
         Ok(r)
     };
-    let ix = bx0 + 1. + s5;
-    let iw = boxed;
+    // On an update's card, progress sits in the footer bar under its note.
+    let (ix, iw) = if update {
+        (bx0, inner)
+    } else {
+        (bx0 + 1. + s5, boxed)
+    };
+    let mut py = y;
+    if update {
+        py = bar_top + s5;
+        if let Some((copy, text)) = &note {
+            gfx::icon(
+                dc,
+                &g.factory,
+                "restart",
+                &[],
+                (bx0, py + 2., 12.),
+                2.,
+                c("text-faint"),
+            )?;
+            gfx::text(dc, text, bx0 + 12. + s3, py, c("text-faint"))?;
+            part(
+                Role::Text,
+                copy,
+                rect(bx0, py, bx0 + 12. + s3 + text.width, py + text.height),
+                None,
+                true,
+            );
+            py += text.height + s4;
+        }
+    }
+    let progress_box = |py: f32, content: f32| -> Result<(D2D_RECT_F, f32)> {
+        if update {
+            Ok((rect(bx0, py, bx1, py + content), py))
+        } else {
+            let r = sunken_box(py, content)?;
+            Ok((r, r.top + 1. + s5))
+        }
+    };
     if let Some((download, label, detail, percent)) = &download {
-        let r = sunken_box(y, label.height + s4 + bar)?;
-        let iy = r.top + 1. + s5;
+        let (r, iy) = progress_box(py, label.height + s4 + bar)?;
         gfx::text(dc, label, ix, iy, c("text-subtle"))?;
         gfx::text(dc, detail, ix + label.width + n("s-2"), iy, c("text-faint"))?;
         if let Some(percent) = percent {
@@ -1994,14 +2230,15 @@ pub fn paint(
             None,
             true,
         );
-        y = r.bottom;
+        py = r.bottom;
     }
     if let (Some(message), Some(source)) = (&restart, &p.restart) {
-        let r = sunken_box(y, message.height + bar)?;
-        let iy = r.top + 1. + s5;
+        let gap = if update { s4 } else { 0. };
+        let (r, iy) = progress_box(py, message.height + gap + bar)?;
         gfx::text(dc, message, ix, iy, c("text-subtle"))?;
         // `update-restart-progress`: full, emptying over the countdown.
-        let track = rect(ix, iy + message.height, ix + iw, iy + message.height + bar);
+        let ty = iy + message.height + gap;
+        let track = rect(ix, ty, ix + iw, ty + bar);
         gfx::fill_round(dc, track, bar / 2., c("surface-canvas"))?;
         let w = (track.right - track.left) * ui.restart;
         if w > 0. {
@@ -2013,7 +2250,10 @@ pub fn paint(
             )?;
         }
         part(Role::Status, &source.message, r, None, true);
-        y = r.bottom;
+        py = r.bottom;
+    }
+    if !update {
+        y = py;
     }
     if let (Some((message, fallback, range, link)), Some(source)) = (&error, &p.error) {
         let r = rect(bx0, y, bx1, y + sunken(message.height));
@@ -2071,25 +2311,15 @@ pub fn paint(
         );
     }
 
-    // ---- close warning ----
-    let warning_top = body_top + body_h;
-    if let Some((copy, text)) = &warning {
-        let r = rect(bx0, warning_top, bx1, warning_top + warning_h - s3);
-        gfx::fill_round(dc, r, n("r-md"), c("caution-surface"))?;
-        gfx::border(dc, r, n("r-md"), 1., t.color_alpha("caution-text", 0.32))?;
-        let ink = c("caution-text");
-        let gx = r.left + 1. + s4;
-        let gy = r.top + 1. + s3 + 1.;
-        gfx::icon(dc, &g.factory, "warning", &[], (gx, gy, 16.), 1.8, ink)?;
-        gfx::text(dc, text, gx + 16. + s3, r.top + 1. + s3, ink)?;
-        part(Role::Status, copy, r, None, true);
-    }
-
     // ---- footer ----
     if let Some(footer) = &p.footer {
-        let fy0 = warning_top + warning_h;
-        let mid = fy0 + s4 + (footer_h - s4 - s6) / 2.;
         let h = n("h-md");
+        let mid = if update {
+            bottom - s6 - h / 2.
+        } else {
+            let fy0 = body_top + body_h;
+            fy0 + s4 + (footer_h - s4 - s6) / 2.
+        };
         let label = |button: &notice::Button, weight: &str| {
             para(g, t, &button.label, (sm, weight), None, None, 10_000.)
         };
@@ -2116,6 +2346,10 @@ pub fn paint(
             raised
         };
         gfx::fill_round(dc, dismiss_r, n("r-md"), fade(fill, footer.dismiss.enabled))?;
+        if update {
+            // On the footer bar the raised button keeps its edge.
+            gfx::border(dc, dismiss_r, n("r-md"), 1., c("border"))?;
+        }
         gfx::text(
             dc,
             &dismiss,
@@ -2418,11 +2652,11 @@ mod tests {
             ..ViewState::default()
         };
         let p = notice::present(Some(&available), &notes);
-        assert_eq!(p.title, "Update available");
+        assert_eq!(p.title, "Captures update available");
         assert_eq!(p.description, "Version 2026.11.13.2 · 104 MB");
         let footer = p.footer.unwrap();
         assert_eq!(footer.dismiss.label, "Not now");
-        assert_eq!(footer.primary.unwrap().label, "Update now");
+        assert_eq!(footer.primary.unwrap().label, "Update");
         assert_eq!(
             p.notes.unwrap().groups[0].items[0]
                 .pull_request
@@ -2443,10 +2677,10 @@ mod tests {
         let p = notice::present(Some(&manual), &ViewState::default());
         assert_eq!(p.footer.unwrap().primary.unwrap().label, "View release");
         assert_eq!(
-            p.close_warning.as_deref(),
+            p.footer_note.as_deref(),
             Some("Open captures will close. Unsaved edits are kept as drafts.")
         );
-        // Verification reads as a finished download; Update now restarts.
+        // Verification reads as a finished download; Update restarts.
         let verifying = mapped(&CheckStatus::Verifying {
             release: release("2026.11.1302"),
         });

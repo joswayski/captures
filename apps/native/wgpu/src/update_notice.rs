@@ -34,6 +34,9 @@ fn text(tokens: &Tokens, value: &str, size: &str, color: &str) -> RichText {
 }
 
 fn paint_icon(ui: &egui::Ui, tokens: &Tokens, area: egui::Rect, icon: Icon, tone: IconTone) {
+    if icon == Icon::None {
+        return;
+    }
     let painter = ui.painter();
     let (fill, ink) = match tone {
         IconTone::Accent => ("theme-accent", "theme-accent-ink"),
@@ -67,6 +70,7 @@ fn paint_icon(ui: &egui::Ui, tokens: &Tokens, area: egui::Rect, icon: Icon, tone
                 ink,
             );
         }
+        Icon::None => {}
         Icon::Spinner => {
             let start = (ui.input(|input| input.time) as f32 * TAU / 0.72) % TAU;
             let points = (0..=18)
@@ -231,49 +235,40 @@ pub fn show(
         s4
     };
     let footer_top = card.bottom() - footer_height;
-    let warning_top = if let Some(warning) = &presentation.close_warning {
-        let text_left = card.left() + s6 + s4 + 16. + tokens.number("s-3");
+    // The restart note: a muted line with its 12 px icon above the footer.
+    let warning_top = if let Some(note) = &presentation.footer_note {
+        let s3 = tokens.number("s-3");
+        let text_left = card.left() + s6 + 12. + s3;
         let galley = card_ui.painter().layout(
-            warning.clone(),
+            note.clone(),
             FontId::proportional(tokens.number("text-sm")),
-            tokens.color("caution-text"),
-            card.right() - s6 - s4 - text_left,
+            tokens.color("text-faint"),
+            card.right() - s6 - text_left,
         );
-        let height = galley.size().y + tokens.number("s-3") * 2.;
+        let top = footer_top - galley.size().y;
         let area = egui::Rect::from_min_max(
-            egui::pos2(card.left() + s6, footer_top - tokens.number("s-3") - height),
-            egui::pos2(card.right() - s6, footer_top - tokens.number("s-3")),
-        );
-        card_ui.painter().rect(
-            area,
-            corner(tokens, "r-md"),
-            tokens.color("caution-surface"),
-            Stroke::new(1., tokens.color("caution-text").gamma_multiply(0.32)),
-            egui::StrokeKind::Inside,
-        );
-        let glyph = egui::Rect::from_min_size(
-            area.min + egui::vec2(tokens.number("s-4"), (height - 16.) / 2.),
-            egui::vec2(16., 16.),
+            egui::pos2(card.left() + s6, top),
+            egui::pos2(card.right() - s6, footer_top),
         );
         crate::capture_controls::paint_icon(
             card_ui.painter(),
-            "warning",
-            glyph,
-            1.8,
-            tokens.color("caution-text"),
+            "restart",
+            egui::Rect::from_min_size(egui::pos2(card.left() + s6, top + 2.), egui::vec2(12., 12.)),
+            2.,
+            tokens.color("text-faint"),
         );
         card_ui.painter().galley(
-            egui::pos2(text_left, area.top() + tokens.number("s-3")),
+            egui::pos2(text_left, top),
             galley,
-            tokens.color("caution-text"),
+            tokens.color("text-faint"),
         );
         let response = card_ui.interact(
             area,
-            card_ui.scope_id().with("close-warning"),
+            card_ui.scope_id().with("footer-note"),
             egui::Sense::hover(),
         );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, warning));
-        area.top() - tokens.number("s-3")
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, note));
+        top - s3
     } else {
         footer_top
     };
@@ -911,7 +906,7 @@ impl Host {
                 "restart": p.restart.as_ref().map(|r| &r.message),
                 "error": p.error.as_ref().map(|e| &e.message),
                 "statusMessage": p.status_message,
-                "closeWarning": p.close_warning,
+                "footerNote": p.footer_note,
                 "footer": p.footer.as_ref().map(|f| serde_json::json!({
                     "dismiss": f.dismiss.label,
                     "primary": f.primary.as_ref().map(|b| &b.label),
@@ -1156,60 +1151,5 @@ mod tests {
         host.apply(Action::Install, false, &mut preferences);
         assert!(!host.simulating && host.next_tick.is_none());
         assert!(host.status.is_none() && !root.path().join("settings.json").exists());
-    }
-
-    #[test]
-    fn close_warning_has_shipping_stem_dot_and_scaled_stroke() {
-        use captures_app::update_notice::{ViewState, fixture, present};
-        let presentation = present(fixture("closing").as_ref(), &ViewState::default());
-        let placement = Placement {
-            x: 0.,
-            y: 0.,
-            width: 456.,
-            height: presentation.card_height + 56.,
-            caret: Caret::None,
-            caret_x: 0.,
-        };
-        for theme in ["light-mustard", "dark-mustard"] {
-            let tokens = crate::tokens::load().remove(theme).unwrap();
-            let ctx = egui::Context::default();
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                assert!(show(ui, &tokens, &presentation, &placement).is_none());
-            });
-            output.textures_delta.clear();
-            let ink = egui::epaint::ColorMode::Solid(tokens.color("caution-text"));
-            let paths: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Path(path) if path.stroke.color == ink => Some(path),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(paths.len(), 3, "rounded triangle, stem and dot: {theme}");
-            assert!(
-                paths
-                    .iter()
-                    .all(|path| (path.stroke.width - 1.2).abs() < 0.001)
-            );
-            let segments: Vec<_> = paths
-                .iter()
-                .filter(|path| path.points.len() == 2)
-                .map(|path| path.points[1] - path.points[0])
-                .collect();
-            // Shipping 24-unit SVG at 16px: v5.2 stem and h.01 round-cap dot.
-            assert!(
-                segments
-                    .iter()
-                    .any(|delta| delta.x.abs() < 0.001 && (delta.y - 3.466_667).abs() < 0.001),
-                "stem: {theme}"
-            );
-            assert!(
-                segments
-                    .iter()
-                    .any(|delta| (delta.x - 0.006_667).abs() < 0.001 && delta.y.abs() < 0.001),
-                "dot: {theme}"
-            );
-        }
     }
 }

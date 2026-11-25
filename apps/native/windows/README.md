@@ -499,7 +499,7 @@ Capture, then "Installing Update…" or "Restarting Captures…" (disabled), and
 "Checking for Updates…" in place; the tooltip reads "Captures — Update
 available" or "Captures — Installing update". Not now/Close hide it (not while
 downloading or restarting); release notes follow the Preferences
-`show_update_changelog` switch, with no toggle on the notice. Update now / Try again / Check again run the same steps as the Updates card,
+`show_update_changelog` switch, with no toggle on the notice. Update / Try again / Check again run the same steps as the Updates card,
 View release, pull request numbers and "download from captur.es" open the
 browser, and progress, restart and error states update in place. Its parts are
 exposed through `panel_uia.rs` (heading, status/alert lines, invokable

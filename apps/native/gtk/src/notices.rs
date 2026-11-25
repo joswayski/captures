@@ -942,6 +942,14 @@ impl UpdateNotice {
             }
         }
         card.add_css_class(&format!("update-notice-{}", p.visual_state));
+        // An update's own cards (offered, downloading, restarting): no icon,
+        // one list under a hairline, and a footer bar for what happens next.
+        let update_layout = p.icon == notice::Icon::None;
+        if update_layout {
+            card.add_css_class("update-notice-update");
+        } else {
+            card.remove_css_class("update-notice-update");
+        }
         card.set_size_request(p.card_width as i32, p.card_height as i32);
         let action = |action: Action| {
             let weak = Rc::downgrade(self);
@@ -955,20 +963,23 @@ impl UpdateNotice {
         // `.update-notice-header`: icon, title and version, What's new.
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         header.add_css_class("update-notice-header");
-        let icon = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        icon.add_css_class("update-app-icon");
-        icon.set_valign(gtk::Align::Center);
-        let glyph: gtk::Widget = match p.icon {
-            notice::Icon::Spinner => spinner(14).upcast(),
-            notice::Icon::App => Icon::new("capture", 18).upcast(),
-            notice::Icon::Check => Icon::new("check", 18).upcast(),
-            notice::Icon::Warning => Icon::new("warning", 18).upcast(),
+        let glyph: Option<gtk::Widget> = match p.icon {
+            notice::Icon::None => None,
+            notice::Icon::Spinner => Some(spinner(14).upcast()),
+            notice::Icon::App => Some(Icon::new("capture", 18).upcast()),
+            notice::Icon::Check => Some(Icon::new("check", 18).upcast()),
+            notice::Icon::Warning => Some(Icon::new("warning", 18).upcast()),
         };
-        glyph.set_halign(gtk::Align::Center);
-        glyph.set_valign(gtk::Align::Center);
-        glyph.set_vexpand(true);
-        icon.append(&glyph);
-        header.append(&icon);
+        if let Some(glyph) = glyph {
+            let icon = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            icon.add_css_class("update-app-icon");
+            icon.set_valign(gtk::Align::Center);
+            glyph.set_halign(gtk::Align::Center);
+            glyph.set_valign(gtk::Align::Center);
+            glyph.set_vexpand(true);
+            icon.append(&glyph);
+            header.append(&icon);
+        }
         let copy = gtk::Box::new(gtk::Orientation::Vertical, 0);
         copy.add_css_class("update-notice-copy");
         copy.set_hexpand(true);
@@ -991,15 +1002,17 @@ impl UpdateNotice {
             let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
             section.add_css_class("update-notes");
             section.set_vexpand(true);
-            section.update_property(&[gtk::accessible::Property::Label("What's new")]);
-            let heading = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            heading.add_css_class("update-notes-heading");
-            let h2 = label(&notes.heading.to_uppercase(), "update-notes-title");
-            h2.set_hexpand(true);
-            h2.set_accessible_role(gtk::AccessibleRole::Heading);
-            h2.update_property(&[gtk::accessible::Property::Label(&notes.heading)]);
-            heading.append(&h2);
-            section.append(&heading);
+            section.update_property(&[gtk::accessible::Property::Label(&notes.heading)]);
+            if !update_layout {
+                let heading = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                heading.add_css_class("update-notes-heading");
+                let h2 = label(&notes.heading.to_uppercase(), "update-notes-title");
+                h2.set_hexpand(true);
+                h2.set_accessible_role(gtk::AccessibleRole::Heading);
+                h2.update_property(&[gtk::accessible::Property::Label(&notes.heading)]);
+                heading.append(&h2);
+                section.append(&heading);
+            }
             if let Some(intro) = &notes.intro {
                 section.append(&description(intro, "update-notes-intro"));
             }
@@ -1008,7 +1021,7 @@ impl UpdateNotice {
             for group in &notes.groups {
                 let block = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 block.add_css_class("update-notes-group");
-                if notes.stacked {
+                if notes.stacked && !update_layout {
                     let h3 = label(&group.display_version, "update-notes-version");
                     h3.set_accessible_role(gtk::AccessibleRole::Heading);
                     block.append(&h3);
@@ -1020,7 +1033,7 @@ impl UpdateNotice {
                 list.add_css_class("update-notes-list");
                 list.update_property(&[gtk::accessible::Property::Label(&group.display_version)]);
                 for item in &group.items {
-                    list.append(&note_item(self, item));
+                    list.append(&note_item(self, item, group.tag.as_ref()));
                 }
                 if group.items.is_empty() {
                     block.append(&description(&notes.group_empty, "update-notes-empty"));
@@ -1062,6 +1075,23 @@ impl UpdateNotice {
             }
             body.append(&section);
         }
+        // The footer bar: the restart note, progress, then the buttons.
+        let bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        bar.add_css_class("update-notice-footer-bar");
+        let lower = if update_layout { &bar } else { &body };
+        if let Some(note) = &p.footer_note {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            row.add_css_class("update-footer-note");
+            let icon = Icon::new("restart", 12).with_stroke(2.);
+            icon.add_css_class("update-footer-note-icon");
+            icon.set_valign(gtk::Align::Start);
+            icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+            row.append(&icon);
+            let text = description(note, "update-footer-note-text");
+            text.set_hexpand(true);
+            row.append(&text);
+            bar.append(&row);
+        }
         if let Some(download) = &p.download {
             let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
             section.add_css_class("update-download");
@@ -1091,7 +1121,7 @@ impl UpdateNotice {
                 });
             }
             section.append(&bar);
-            body.append(&section);
+            lower.append(&section);
             live.detail = Some(detail);
             live.bar = Some(bar);
         }
@@ -1123,7 +1153,7 @@ impl UpdateNotice {
                 }
             });
             section.append(&bar);
-            body.append(&section);
+            lower.append(&section);
             live.restart = Some(message);
             // `.update-notice:has(.update-restarting)`: the card leaves as
             // the countdown ends; a failed restart drops the class and it
@@ -1163,26 +1193,13 @@ impl UpdateNotice {
             status.set_accessible_role(gtk::AccessibleRole::Status);
             body.append(&status);
         }
-        let compact = p.notes.is_none() && p.download.is_none() && p.restart.is_none();
+        let compact =
+            !update_layout && p.notes.is_none() && p.download.is_none() && p.restart.is_none();
         let mut rows: Vec<gtk::Widget> = vec![header.upcast()];
-        // `.update-notice-compact .update-notice-body:empty { display: none }`.
-        if body.first_child().is_some() {
+        // `.update-notice-compact .update-notice-body:empty { display: none }`;
+        // an update keeps it to hold the footer bar at the bottom.
+        if body.first_child().is_some() || update_layout {
             rows.push(body.clone().upcast());
-        }
-        if let Some(warning) = &p.close_warning {
-            let row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .accessible_role(gtk::AccessibleRole::Status)
-                .build();
-            row.add_css_class("update-close-warning");
-            let icon = Icon::new("warning", 16);
-            icon.add_css_class("update-close-warning-icon");
-            icon.set_valign(gtk::Align::Start);
-            row.append(&icon);
-            let text = description(warning, "update-close-warning-text");
-            text.set_hexpand(true);
-            row.append(&text);
-            rows.push(row.upcast());
         }
         if let Some(footer) = &p.footer {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1214,7 +1231,14 @@ impl UpdateNotice {
                 button.connect_clicked(action(primary.action.clone()));
                 row.append(&button);
             }
-            rows.push(row.upcast());
+            if update_layout {
+                bar.append(&row);
+            } else {
+                rows.push(row.upcast());
+            }
+        }
+        if bar.first_child().is_some() {
+            rows.push(bar.upcast());
         }
         // Shipping's four grid rows: compact cards share the spare height
         // between every row track (empty ones last); with notes or
@@ -1257,7 +1281,11 @@ fn set_progress(bar: &gtk::ProgressBar, download: &notice::Download) {
 
 /// A release note bullet with its pull request link inline, as shipping's
 /// `<li>{text} <button>#123</button></li>`.
-fn note_item(notice: &Rc<UpdateNotice>, item: &notice::NoteItem) -> gtk::Box {
+fn note_item(
+    notice: &Rc<UpdateNotice>,
+    item: &notice::NoteItem,
+    tag: Option<&notice::VersionLink>,
+) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .accessible_role(gtk::AccessibleRole::ListItem)
@@ -1269,6 +1297,26 @@ fn note_item(notice: &Rc<UpdateNotice>, item: &notice::NoteItem) -> gtk::Box {
     bullet.set_valign(gtk::Align::Start);
     row.append(&bullet);
     let text = match &item.pull_request {
+        // A plain change with both: its PR link, then its version tag.
+        Some(pull) if item.title.is_none() && tag.is_some() => {
+            let tail = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let link = button(&format!("#{}", pull.number), &["notice-inline-button"]);
+            link.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Open pull request {}",
+                pull.number
+            ))]);
+            let (weak, url) = (Rc::downgrade(notice), pull.url.clone());
+            link.connect_clicked(move |_| {
+                if let Some(notice) = weak.upgrade() {
+                    notice.act(Action::OpenPullRequest { url: url.clone() });
+                }
+            });
+            tail.append(&link);
+            let version = release_link(notice, tag.expect("tag"), "update-notes-tag");
+            version.set_margin_start(6);
+            tail.append(&version);
+            InlineTail::new(&description(&item.text, "update-notes-text"), &tail).upcast()
+        }
         Some(pull) => {
             let (weak, url) = (Rc::downgrade(notice), pull.url.clone());
             inline(
@@ -1290,18 +1338,64 @@ fn note_item(notice: &Rc<UpdateNotice>, item: &notice::NoteItem) -> gtk::Box {
     };
     // A highlight: its semibold title over the description, as the
     // retired Tauri UI's `<strong>` and `<span>` lines.
+    // An older release's change ends its title (or plain text) with that
+    // release's version as a small link.
+    let tagged = |text: gtk::Label| -> gtk::Widget {
+        match tag {
+            Some(tag) => {
+                let link = release_link(notice, tag, "update-notes-tag");
+                InlineTail::new(&text, &link).upcast()
+            }
+            None => text.upcast(),
+        }
+    };
     if let Some(title) = &item.title {
         row.add_css_class("update-notes-highlight");
         let copy = gtk::Box::new(gtk::Orientation::Vertical, 0);
         copy.set_hexpand(true);
-        copy.append(&description(title, "update-notes-highlight-title"));
+        copy.append(&tagged(description(title, "update-notes-highlight-title")));
         text.add_css_class("update-notes-highlight-text");
         copy.append(&text);
         row.append(&copy);
+    } else if tag.is_some() && item.pull_request.is_none() {
+        row.append(&tagged(description(&item.text, "update-notes-text")));
     } else {
         row.append(&text);
     }
     row
+}
+
+/// A version that opens its GitHub release: the text, then the
+/// external-link icon raised to the text's top right. Muted at rest, the
+/// text colour and underlined on hover.
+fn release_link(notice: &Rc<UpdateNotice>, link: &notice::VersionLink, class: &str) -> gtk::Button {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    content.append(&label(&link.text, "update-version-link-text"));
+    let arrow = crate::widgets::Icon::new("release-link", 10).with_stroke(2.);
+    arrow.add_css_class("update-version-link-icon");
+    arrow.set_margin_start(2);
+    arrow.set_valign(gtk::Align::Start);
+    arrow.set_accessible_role(gtk::AccessibleRole::Presentation);
+    content.append(&arrow);
+    let button = gtk::Button::builder()
+        .child(&content)
+        .accessible_role(gtk::AccessibleRole::Link)
+        .css_classes(["update-version-link", class])
+        .valign(gtk::Align::Start)
+        .build();
+    button.set_cursor_from_name(Some("pointer"));
+    button.set_tooltip_text(Some("View this release on GitHub"));
+    button.update_property(&[
+        gtk::accessible::Property::Label(&link.text),
+        gtk::accessible::Property::Description(&link.url),
+    ]);
+    let (weak, url) = (Rc::downgrade(notice), link.url.clone());
+    button.connect_clicked(move |_| {
+        if let Some(notice) = weak.upgrade() {
+            notice.open_release(&url);
+        }
+    });
+    button
 }
 
 /// The notice description with the version as a plain external link
@@ -1323,32 +1417,7 @@ fn version_description(notice: &Rc<UpdateNotice>, p: &Presentation) -> gtk::Widg
     if !before.is_empty() {
         row.append(&label(before, "update-notice-description-text"));
     }
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    content.append(&label(&link.text, "update-version-link-text"));
-    // Caper's external-link icon: 12 px, 4 px after the version.
-    let arrow = crate::widgets::Icon::new("release-link", 12).with_stroke(2.);
-    arrow.add_css_class("update-version-link-icon");
-    arrow.set_margin_start(4);
-    arrow.set_valign(gtk::Align::Center);
-    arrow.set_accessible_role(gtk::AccessibleRole::Presentation);
-    content.append(&arrow);
-    let button = gtk::Button::builder()
-        .child(&content)
-        .accessible_role(gtk::AccessibleRole::Link)
-        .css_classes(["update-version-link"])
-        .build();
-    button.set_cursor_from_name(Some("pointer"));
-    button.update_property(&[
-        gtk::accessible::Property::Label(&link.text),
-        gtk::accessible::Property::Description(&link.url),
-    ]);
-    let (weak, url) = (Rc::downgrade(notice), link.url.clone());
-    button.connect_clicked(move |_| {
-        if let Some(notice) = weak.upgrade() {
-            notice.open_release(&url);
-        }
-    });
-    row.append(&button);
+    row.append(&release_link(notice, link, "update-version-link-header"));
     if !after.is_empty() {
         row.append(&label(after, "update-notice-description-text"));
     }
