@@ -361,9 +361,12 @@
    * (centered on it) so the stills read at a useful size; on narrow screens
    * it matches the column. Rows are flex lines whose items grow by aspect
    * ratio (set inline), so paired stills share one height uncropped.
+   * Width comes from the page wrapper (a size container), not 100vw: iOS
+   * Safari's landscape 100vw includes the notch safe areas, which made the
+   * gallery wider than the page and clipped it.
    */
   .product-gallery {
-    --gallery-width: min(64rem, calc(100vw - 3rem));
+    --gallery-width: min(64rem, calc(100cqw - 3rem));
     width: var(--gallery-width);
     max-width: none;
     margin-inline: calc((100% - var(--gallery-width)) / 2);
