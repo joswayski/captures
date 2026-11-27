@@ -244,6 +244,15 @@ enum CaptureMenuPolicy {
             Double(chip.minX), Double(chip.minY), Double(chip.maxX), Double(chip.maxY),
             currentlyOver)
     }
+
+    /// The bar's target opacity: 0.15 while a region drag's selection overlaps
+    /// it, else 1. Selection and bar share one flipped (top-left) space.
+    static func menuOpacity(dragging: Bool, selection: NSRect?, bar: NSRect) -> CGFloat {
+        let s = selection ?? .zero
+        return CGFloat(captures_capture_menu_opacity_v1(dragging, selection != nil,
+            Double(s.minX), Double(s.minY), Double(s.maxX), Double(s.maxY),
+            Double(bar.minX), Double(bar.minY), Double(bar.maxX), Double(bar.maxY)))
+    }
 }
 
 /// Shipping `CaptureGuidance` copy, shared by New Capture and the direct
@@ -1692,6 +1701,8 @@ final class UnifiedCaptureSelectionView: NSView {
     private let displayIdentity: CaptureDisplayIdentity?
     private let currentDisplayTitle: String
     private var regionGestureActive = false
+    /// The bar's target opacity (`CaptureMenuPolicy.menuOpacity`).
+    private(set) var controlsOpacity: CGFloat = 1
     /// Window mode pointer is over the desktop or shell chrome.
     private var hoveringDisplay = false
     var isGuidanceDucked: Bool { guidance.isDucked }
@@ -2000,6 +2011,22 @@ final class UnifiedCaptureSelectionView: NSView {
         _ = hoverWindow(convert(point, from: nil))
     }
 
+    /// A region drag over the bar fades it out of the way (the guidance fade's
+    /// 200 ms), so the screen under it stays visible.
+    private func yieldControls() {
+        let dragging = target == .region && region.mode != nil
+        let opacity = CaptureMenuPolicy.menuOpacity(dragging: dragging,
+            selection: target == .region ? region.nsRect : nil, bar: controls.frame)
+        guard opacity != controlsOpacity else { return }
+        controlsOpacity = opacity
+        let fade = NativeMotion.transition("capture_guidance_fade", tokens: tokens)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = fade.duration
+            context.timingFunction = fade.timing
+            controls.animator().alphaValue = opacity
+        }
+    }
+
     private func update() {
         controls.setCaptureEnabled(choice != nil)
         for view in windowTargetViews { view.isHidden = target != .window }
@@ -2035,6 +2062,7 @@ final class UnifiedCaptureSelectionView: NSView {
         }
         guidance.setPresent(guidanceCopy != nil)
         guidance.setSuppressed(target == .region && region.mode != nil)
+        yieldControls()
         updateDisplayIdentity()
         selectionLabel.stringValue = label
         selectionLabel.isHidden = label.isEmpty

@@ -970,6 +970,33 @@ impl Overlay {
         }
     }
 
+    /// Fade the bar (`.yielded`) while a region drag's selection covers it,
+    /// so the screen under it stays visible.
+    fn yield_bar(&self) {
+        let Some(bar) = &self.bar else { return };
+        let Some(bounds) = bar.root.compute_bounds(&self.root) else {
+            return;
+        };
+        let start = self.point(bounds.x().into(), bounds.y().into());
+        let end = self.point(
+            (bounds.x() + bounds.width()).into(),
+            (bounds.y() + bounds.height()).into(),
+        );
+        let state = self.state.borrow();
+        let opacity = capture_menu::menu_opacity(
+            state.drag.is_some(),
+            state
+                .rect
+                .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height]),
+            [start.x, start.y, end.x, end.y],
+        );
+        if opacity < 1. {
+            bar.root.add_css_class("yielded");
+        } else {
+            bar.root.remove_css_class("yielded");
+        }
+    }
+
     /// Widget points to selection points.
     fn point(&self, x: f64, y: f64) -> Point {
         let (width, height) = self.bounds.get();
@@ -1197,6 +1224,7 @@ impl Overlay {
                 ));
             }
             drop(state);
+            overlay.yield_bar();
             overlay.area.queue_draw();
         };
         let finish = update.clone();
@@ -1215,6 +1243,7 @@ impl Overlay {
                 state.drag = None;
                 state.rect
             };
+            overlay.yield_bar();
             let moved = dx.hypot(dy) > 0.;
             if matches!(mode, DragMode::Create) && !(moved && selection::capturable(rect)) {
                 // A click, or a region too small to capture.

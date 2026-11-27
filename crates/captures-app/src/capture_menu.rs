@@ -417,6 +417,25 @@ pub fn pointer_over_guidance(
     x >= left - pad && x <= right + pad && y >= top - pad && y <= bottom + pad
 }
 
+/// The bar's opacity while a region drag's selection overlaps it, so the
+/// screen under the bar stays visible as the region is drawn over it. Hosts
+/// fade to and from it with [`crate::motion::Transition::CaptureGuidanceFade`].
+pub const MENU_YIELD_OPACITY: f64 = 0.15;
+
+/// The capture bar's target opacity: [`MENU_YIELD_OPACITY`] while a region
+/// drag (`dragging`) has a selection overlapping the bar, else 1. Rects are
+/// `[left, top, right, bottom]` in one logical space.
+pub fn menu_opacity(dragging: bool, selection: Option<[f64; 4]>, bar: [f64; 4]) -> f64 {
+    let overlaps = selection.is_some_and(|[left, top, right, bottom]| {
+        left < bar[2] && right > bar[0] && top < bar[3] && bottom > bar[1]
+    });
+    if dragging && overlaps {
+        MENU_YIELD_OPACITY
+    } else {
+        1.
+    }
+}
+
 /// Shipping `.capture-guidance { top: 16% }`: the chip's resting top edge, as
 /// a fraction of the overlay height.
 pub const GUIDANCE_TOP_FRACTION: f64 = 0.16;
@@ -821,6 +840,19 @@ mod tests {
         assert!(over(72., false));
         assert!(over(61., true), "leave slack keeps a faded chip hidden");
         assert!(!over(59., true));
+    }
+
+    #[test]
+    fn bar_yields_only_while_a_drag_overlaps_it() {
+        let bar = [100., 600., 900., 680.];
+        // A drag that started above the bar and reached into it.
+        let into = Some([40., 200., 300., 610.]);
+        assert_eq!(menu_opacity(true, into, bar), MENU_YIELD_OPACITY);
+        assert_eq!(menu_opacity(false, into, bar), 1., "released: fades back");
+        // Touching the bar's top edge, or beside it, is not over it.
+        assert_eq!(menu_opacity(true, Some([40., 200., 300., 600.]), bar), 1.);
+        assert_eq!(menu_opacity(true, Some([900., 590., 990., 700.]), bar), 1.);
+        assert_eq!(menu_opacity(true, None, bar), 1.);
     }
 
     /// The shipping `shared/design.css` motion tokens the chip uses.

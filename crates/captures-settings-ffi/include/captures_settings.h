@@ -291,6 +291,13 @@ char *captures_capture_menu_v1(const char *request_json);
  * and chip bounds share one top-left logical space. No allocation. */
 bool captures_capture_guidance_pointer_over_v1(double x, double y, double left,
     double top, double right, double bottom, bool currently_over);
+/* The New Capture bar's target opacity: 0.15 while a region drag's selection
+ * overlaps the bar, else 1. Selection and bar share one top-left logical space;
+ * has_selection false ignores the selection edges. No allocation. */
+double captures_capture_menu_opacity_v1(bool dragging, bool has_selection,
+    double selection_left, double selection_top, double selection_right,
+    double selection_bottom, double bar_left, double bar_top, double bar_right,
+    double bar_bottom);
 
 /* Shipping Preferences copy and policy (captures-app::preferences). Operations:
  * "copy" {platform? "macos"|"windows"|"linux"} -> sections, row titles and

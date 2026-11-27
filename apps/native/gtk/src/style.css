@@ -3800,6 +3800,12 @@ window.captures.capture-surface {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     var(--glass-shadow);
+  transition: opacity var(--dur-3) var(--ease-standard);
+}
+/* A region drag over the bar fades it out of the way
+   (`capture_menu::MENU_YIELD_OPACITY`). */
+.captures .capture-bar.yielded {
+  opacity: 0.15;
 }
 /* `.recording-panel-top`. */
 .captures .capture-bar-top {

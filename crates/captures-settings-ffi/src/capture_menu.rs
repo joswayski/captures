@@ -260,6 +260,34 @@ pub extern "C" fn captures_capture_guidance_pointer_over_v1(
     capture_menu::pointer_over_guidance(x, y, left, top, right, bottom, currently_over)
 }
 
+/// `capture_menu::menu_opacity`: the bar fades while a region drag covers it.
+/// Selection and bar share one top-left logical space. No allocation.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn captures_capture_menu_opacity_v1(
+    dragging: bool,
+    has_selection: bool,
+    selection_left: f64,
+    selection_top: f64,
+    selection_right: f64,
+    selection_bottom: f64,
+    bar_left: f64,
+    bar_top: f64,
+    bar_right: f64,
+    bar_bottom: f64,
+) -> f64 {
+    capture_menu::menu_opacity(
+        dragging,
+        has_selection.then_some([
+            selection_left,
+            selection_top,
+            selection_right,
+            selection_bottom,
+        ]),
+        [bar_left, bar_top, bar_right, bar_bottom],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +311,7 @@ mod tests {
         let header = include_str!("../include/captures_settings.h");
         assert!(header.contains("char *captures_capture_menu_v1(const char *request_json);"));
         assert!(header.contains("bool captures_capture_guidance_pointer_over_v1("));
+        assert!(header.contains("double captures_capture_menu_opacity_v1("));
     }
 
     #[test]

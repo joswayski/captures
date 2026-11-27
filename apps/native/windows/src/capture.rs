@@ -658,6 +658,9 @@ pub struct Menu {
     /// Per-toggle slide state `(target, from, since_ms)` indexed by
     /// `RecordingToggle::ALL`, easing over `--dur-3` `--ease-standard`.
     toggle_slides: [Option<(bool, f32, f64)>; 3],
+    /// The bar's opacity leg `(to, from, since_ms)`: it fades to
+    /// `MENU_YIELD_OPACITY` while a region drag covers it.
+    panel_fade: (f64, f64, f64),
 }
 
 /// The chip's frame with its title and hint lines.
@@ -752,6 +755,7 @@ impl Menu {
             panel_at: None,
             panel_drag: None,
             toggle_slides: [None; 3],
+            panel_fade: (1., 1., f64::NEG_INFINITY),
         }
     }
 
@@ -1258,6 +1262,9 @@ impl Menu {
             || toggling
             // The feedback's end re-keys the chip.
             || self.feedback.1.is_some()
+            || Transition::CaptureGuidanceFade
+                .resolve(t)
+                .is_some_and(|tween| tween.running(now - self.panel_fade.2, self.reduced))
             || self.feedback_pending
             || self.tooltip.animating(t, now)
     }
@@ -2014,7 +2021,6 @@ impl Menu {
                 )
             };
         }
-        let glass_text = t.color("glass-text");
         let accent = t.color("theme-accent");
         match self.target {
             // `CaptureDim`: the shade, cut out around a drawn region, then
@@ -2103,6 +2109,56 @@ impl Menu {
             self.layout = Some(layout);
             return Ok(());
         }
+        // The bar fades out of the way while a region drag covers it.
+        let panel = Pose {
+            opacity: self.panel_opacity(t, &layout.panel),
+            ..Pose::REST
+        };
+        let painted = with_pose(dc, &panel, (0., 0.), || self.paint_panel(dc, g, t, &layout));
+        self.layout = Some(layout);
+        painted?;
+        for (hit, progress) in self.tooltip.frames(t, self.clock) {
+            // The anchor is laid out from this paint; a key whose control
+            // left the bar draws nothing.
+            let anchor = self.tooltip_anchor(hit);
+            if let Some((label, anchor)) = anchor {
+                use crate::tooltip::{self, Align};
+                let gap = tooltip::GAP;
+                tooltip::paint(dc, g, t, label, anchor, Align::Center, gap, full, progress)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Follow `capture_menu::menu_opacity` with the guidance fade's tween,
+    /// restarting from the current value like a CSS transition.
+    fn panel_opacity(&mut self, t: &Tokens, panel: &Rect) -> f64 {
+        let edges = |r: &Rect| [r.left, r.top, r.right, r.bottom].map(f64::from);
+        let goal = capture_menu::menu_opacity(
+            self.drag.is_some(),
+            self.selection.as_ref().map(edges),
+            edges(panel),
+        );
+        let Some(tween) = Transition::CaptureGuidanceFade.resolve(t) else {
+            return goal;
+        };
+        let (to, from, since) = self.panel_fade;
+        let current = tween.value(from, to, self.clock - since, self.reduced);
+        if goal != to {
+            self.panel_fade = (goal, current, self.clock);
+        }
+        current
+    }
+
+    /// `.recording-selector-panel` and everything on it.
+    fn paint_panel(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        layout: &Layout,
+    ) -> Result<()> {
+        let glass_text = t.color("glass-text");
         // `.recording-selector-panel`
         let panel_r = t.n("r-3xl");
         gfx::shadow(dc, layout.panel, panel_r, t.shadow("glass-shadow"))?;
@@ -2241,7 +2297,7 @@ impl Menu {
                 self.paint_options(dc, g, t, &layout.panel, *row_top, fields)
             })?;
         }
-        self.paint_focus(dc, t, &layout)?;
+        self.paint_focus(dc, t, layout)?;
         // `.capture-selector-note`; a hovered or focused Preferences link
         // lights `--glass-hover` with `--theme-accent-text-strong` ink and a
         // fully opaque icon.
@@ -2284,17 +2340,6 @@ impl Menu {
             with_pose(dc, &self.listbox_pose(t), center, || {
                 self.paint_listbox(dc, t, listbox)
             })?;
-        }
-        self.layout = Some(layout);
-        for (hit, progress) in self.tooltip.frames(t, self.clock) {
-            // The anchor is laid out from this paint; a key whose control
-            // left the bar draws nothing.
-            let anchor = self.tooltip_anchor(hit);
-            if let Some((label, anchor)) = anchor {
-                use crate::tooltip::{self, Align};
-                let gap = tooltip::GAP;
-                tooltip::paint(dc, g, t, label, anchor, Align::Center, gap, full, progress)?;
-            }
         }
         Ok(())
     }
