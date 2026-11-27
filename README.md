@@ -12,19 +12,19 @@ A cross-platform screen capture utility for macOS, Windows, and Linux.
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/images/capture-selection.jpg" alt="Captures region recording over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box and the full Record menu showing Start recording" width="100%">
+      <img src="docs/images/capture-selection.jpg" alt="Captures New Capture bar in Screenshot mode with a region drawn over an aerial view of a container ship wedged across a canal" width="100%">
       <br>
       <sub><strong>Capture what you need</strong> · A region, a window, or a full display. Screenshot or record from the same menu.</sub>
     </td>
     <td width="50%">
-      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button" width="100%">
+      <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with a desert canal, a Choke point label and arrow, a tiger on the left bank, and a container ship hanging off the right edge with an Expand canvas button" width="100%">
       <br>
       <sub><strong>Edit right away</strong> · Annotate screenshots with text, arrows, shapes, and crops.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <img src="docs/images/collapsed-mini-previews.jpg" alt="Captures mini preview cards naturally layered into a compact stack over a photo" width="100%">
+      <img src="docs/images/collapsed-mini-previews.jpg" alt="Captures mini preview cards collapsed into a compact corner stack, with the container ship capture on top" width="100%">
       <br>
       <sub><strong>Keep captures handy</strong> · Collapse recent captures into a compact corner stack until you need them.</sub>
     </td>
