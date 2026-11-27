@@ -2118,7 +2118,8 @@ window.captures.preview-stack-window {
   border-radius: var(--r-pill);
   border-color: alpha(var(--theme-accent), 0.72);
   color: var(--theme-accent-text);
-  background: var(--glass-strong);
+  /* Solid: the pill rests over the thumbnail without the hover veil. */
+  background: var(--glass-strong-solid);
   box-shadow:
     var(--shadow-sm),
     0 0 14px alpha(var(--theme-accent), 0.2);

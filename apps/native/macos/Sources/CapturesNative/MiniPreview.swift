@@ -644,7 +644,8 @@ final class MiniPreviewButton: NSButton {
         let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: radius - 0.5, yRadius: radius - 0.5)
         let accent = tokens.color("theme-accent")
-        (offersAction ? accent : tokens.color("glass-strong")).setFill(); pill.fill()
+        // Solid glass: the pill rests over the thumbnail without the hover veil.
+        (offersAction ? accent : tokens.color("glass-strong-solid")).setFill(); pill.fill()
         if !offersAction {
             accent.withAlphaComponent(0.72).setStroke(); pill.lineWidth = 1; pill.stroke()
         }

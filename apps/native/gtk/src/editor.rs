@@ -2027,6 +2027,14 @@ impl State {
                 };
                 request
             }
+            // A new shape or stroke shows as its commit would draw it, in
+            // the chosen style rather than an accent outline.
+            (Some(gesture @ (Gesture::Shape { .. } | Gesture::Freehand(_))), _) => {
+                let Some(request) = self.drawing_request(&gesture) else {
+                    return;
+                };
+                request
+            }
             _ => return,
         };
         self.preview_busy.set(true);
@@ -2233,10 +2241,15 @@ impl State {
             }
             Outcome::Preview(result) => {
                 self.preview_busy.set(false);
-                let stroking = matches!(
+                let drawing = matches!(
                     *self.gesture.borrow(),
-                    Some(Gesture::Brush(_) | Gesture::Layer { .. })
+                    Some(Gesture::Shape { .. } | Gesture::Freehand(_))
                 );
+                let stroking = drawing
+                    || matches!(
+                        *self.gesture.borrow(),
+                        Some(Gesture::Brush(_) | Gesture::Layer { .. })
+                    );
                 match result {
                     // Only a gesture still in progress shows its preview; the
                     // committed result replaces it once the worker publishes.
@@ -2246,6 +2259,9 @@ impl State {
                         self.canvas.queue_draw();
                     }
                     Ok(_) => {}
+                    // A shape still flat in one direction can't be drawn
+                    // yet; the drag keeps going.
+                    Err(_) if drawing => {}
                     Err(error) => *self.notice.borrow_mut() = Some((error, true)),
                 }
                 if self.preview_dirty.get() {
@@ -3748,7 +3764,10 @@ impl State {
             (_, "Escape") => {
                 let gesture = self.gesture.borrow_mut().take();
                 self.settle_card();
-                if matches!(gesture, Some(Gesture::Layer { .. })) {
+                if matches!(
+                    gesture,
+                    Some(Gesture::Layer { .. } | Gesture::Shape { .. } | Gesture::Freehand(_))
+                ) {
                     self.preview_dirty.set(false);
                     self.restore_frame();
                 }
@@ -3934,6 +3953,8 @@ impl State {
     fn update(&self, x: f64, y: f64, dx: f64, dy: f64, shift: bool) {
         let point = self.to_document(x, y);
         let mut gesture = self.gesture.borrow_mut();
+        // A new shape or stroke past the click threshold previews its pixels.
+        let mut drawing = false;
         match gesture.as_mut() {
             Some(Gesture::Crop(drag)) => {
                 let Some(point) = point else { return };
@@ -3967,15 +3988,24 @@ impl State {
                 self.preview_brush();
                 return;
             }
-            Some(Gesture::Shape { end, .. } | Gesture::Move { end, .. }) => {
+            Some(Gesture::Move { end, .. }) => {
                 if let Some(point) = point {
                     *end = point;
                 }
+            }
+            Some(Gesture::Shape { start, end, .. }) => {
+                if let Some(point) = point {
+                    *end = point;
+                }
+                // A click under the drag threshold creates nothing.
+                let scale = self.zoom_percent().unwrap_or(100.) / 100.;
+                drawing = (end.x - start.x).hypot(end.y - start.y) * scale >= 3.;
             }
             Some(Gesture::Freehand(points)) => {
                 if let Some(point) = point {
                     points.push(point);
                 }
+                drawing = true;
             }
             Some(Gesture::Brush(points)) => {
                 // Off-canvas points still paint, as shipping's stroke does.
@@ -3991,6 +4021,9 @@ impl State {
             None => return,
         }
         drop(gesture);
+        if drawing {
+            self.preview_brush();
+        }
         self.preview_card();
         self.canvas.queue_draw();
     }
@@ -4023,7 +4056,14 @@ impl State {
                 },
             }),
             Gesture::Move { .. } => None,
-            gesture @ Gesture::Freehand(_) => self.drawing_request(&gesture),
+            gesture @ Gesture::Freehand(_) => {
+                self.preview_dirty.set(false);
+                let request = self.drawing_request(&gesture);
+                if request.is_none() {
+                    self.restore_frame();
+                }
+                request
+            }
             Gesture::Brush(points) => {
                 self.preview_dirty.set(false);
                 let eraser = &self.properties.eraser;
@@ -4034,10 +4074,17 @@ impl State {
                     mode,
                 })
             }
-            Gesture::Shape { start, end, .. } if !moved(start, end) => None,
+            Gesture::Shape { start, end, .. } if !moved(start, end) => {
+                self.preview_dirty.set(false);
+                self.restore_frame();
+                None
+            }
             // The rectangle stays staged for Apply crop.
             Gesture::Crop(_) => None,
-            gesture @ Gesture::Shape { .. } => self.drawing_request(&gesture),
+            gesture @ Gesture::Shape { .. } => {
+                self.preview_dirty.set(false);
+                self.drawing_request(&gesture)
+            }
         };
         // The commit's frame replaces a card preview; nothing else does.
         if request.is_some() {
@@ -4653,30 +4700,8 @@ impl State {
         if let Some(id) = selected {
             self.draw_selection(snapshot, &id, gesture.as_ref());
         }
-        match &gesture {
-            Some(Gesture::Shape { tool, start, end }) => {
-                let (Some(a), Some(b)) = (self.to_screen(*start), self.to_screen(*end)) else {
-                    return;
-                };
-                if open_kind(tool).is_some() {
-                    stroke(snapshot, &[a, b], false, accent, 2.);
-                } else {
-                    stroke(
-                        snapshot,
-                        &[(a.0, a.1), (b.0, a.1), (b.0, b.1), (a.0, b.1)],
-                        true,
-                        accent,
-                        1.5,
-                    );
-                }
-            }
-            Some(Gesture::Freehand(points)) => {
-                let screen: Vec<(f64, f64)> =
-                    points.iter().filter_map(|p| self.to_screen(*p)).collect();
-                stroke(snapshot, &screen, false, accent, 2.);
-            }
-            _ => {}
-        }
+        // A new shape or stroke draws in the canvas pixels the worker
+        // previews (`preview_brush`), not here.
         self.draw_crop(snapshot, &bounds);
         self.draw_brush_ring(snapshot);
     }
@@ -4827,50 +4852,4 @@ impl State {
         );
         let _ = cr.stroke();
     }
-}
-
-/// A polyline in a Cairo node bounded to its own box, so only those pixels
-/// rasterize, never the canvas or the image under it.
-fn stroke(
-    snapshot: &gtk::Snapshot,
-    points: &[(f64, f64)],
-    close: bool,
-    color: gdk::RGBA,
-    width: f64,
-) {
-    if points.len() < 2 {
-        return;
-    }
-    let pad = width + 1.;
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for (x, y) in points {
-        x0 = x0.min(*x);
-        y0 = y0.min(*y);
-        x1 = x1.max(*x);
-        y1 = y1.max(*y);
-    }
-    let bounds = graphene::Rect::new(
-        (x0 - pad) as f32,
-        (y0 - pad) as f32,
-        (x1 - x0 + 2. * pad) as f32,
-        (y1 - y0 + 2. * pad) as f32,
-    );
-    let cr = snapshot.append_cairo(&bounds);
-    cr.set_source_rgba(
-        color.red().into(),
-        color.green().into(),
-        color.blue().into(),
-        color.alpha().into(),
-    );
-    cr.set_line_width(width);
-    cr.set_line_join(gtk::cairo::LineJoin::Round);
-    cr.set_line_cap(gtk::cairo::LineCap::Round);
-    cr.move_to(points[0].0, points[0].1);
-    for (x, y) in &points[1..] {
-        cr.line_to(*x, *y);
-    }
-    if close {
-        cr.close_path();
-    }
-    let _ = cr.stroke();
 }

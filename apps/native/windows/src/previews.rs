@@ -2939,12 +2939,15 @@ impl Stack {
             color: [accent.r, accent.g, accent.b, 0.2 * grown],
         };
         gfx::shadow(dc, b, radius, &[glow])?;
+        // The pill sits over the thumbnail without the hover veil, so it
+        // grows into the solid glass fill to keep the image from showing
+        // through it.
         let fill = if filled {
             accent
         } else if pointed {
-            t.color("glass-raised")
+            lerp(t.color("glass-raised"), t.color("glass-raised-solid"))
         } else {
-            t.color("glass-strong")
+            lerp(t.color("glass-strong"), t.color("glass-strong-solid"))
         };
         gfx::fill_round(dc, b, radius, fill)?;
         if !filled {

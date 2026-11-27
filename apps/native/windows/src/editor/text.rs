@@ -1209,6 +1209,14 @@ impl Editor {
                 Some(request) => request,
                 None => return,
             },
+            // A new shape or stroke shows as its commit would draw it, in
+            // the chosen style rather than an accent outline.
+            Some(gesture @ (Gesture::Shape { .. } | Gesture::Freehand(_))) => {
+                match self.drawing_request(&gesture) {
+                    Some(request) => request,
+                    None => return,
+                }
+            }
             _ => return,
         };
         self.preview_busy = true;

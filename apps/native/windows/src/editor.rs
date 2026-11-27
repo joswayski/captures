@@ -2688,7 +2688,12 @@ impl Editor {
                     ) => Some(id.clone()),
                     _ => None,
                 };
-                let previewing = layer.is_some() || matches!(self.gesture, Some(Gesture::Brush(_)));
+                let drawing = matches!(
+                    self.gesture,
+                    Some(Gesture::Shape { .. } | Gesture::Freehand(_))
+                );
+                let previewing =
+                    layer.is_some() || drawing || matches!(self.gesture, Some(Gesture::Brush(_)));
                 match result {
                     // Only a drag still in progress shows its preview; the
                     // committed result replaces it once the worker publishes.
@@ -2702,6 +2707,9 @@ impl Editor {
                             self.overlay_changed();
                         }
                     }
+                    // A shape still flat in one direction can't be drawn
+                    // yet; the drag keeps going.
+                    Err(_) if drawing => {}
                     Err(error) => self.set_notice(Some((error, true))),
                 }
                 if self.preview_dirty && previewing {
@@ -2960,9 +2968,15 @@ impl Editor {
                     self.update_crop(point);
                 }
             }
-            Some(Gesture::Shape { end, .. }) => {
+            Some(Gesture::Shape { start, end, .. }) => {
                 if let Some(point) = point {
                     *end = point;
+                }
+                // A click under the drag threshold creates nothing.
+                let distance = (end.x - start.x).hypot(end.y - start.y);
+                let scale = self.zoom_percent().unwrap_or(100.) / 100.;
+                if distance * scale >= DRAG_MIN {
+                    self.preview_gesture();
                 }
                 self.preview_card();
             }
@@ -2997,6 +3011,7 @@ impl Editor {
                 if let Some(point) = point {
                     points.push(point);
                 }
+                self.preview_gesture();
                 self.preview_card();
             }
             None => return,
@@ -3043,9 +3058,9 @@ impl Editor {
         }
     }
 
-    /// The canvas draws a new shape or stroke as a local overlay; the
-    /// capture's mini preview card gets it rendered by the worker, one frame
-    /// at a time, so the card follows the pointer too.
+    /// The canvas shows a new shape or stroke through `preview_gesture`; the
+    /// capture's mini preview card gets it rendered by the worker too, one
+    /// frame at a time, so the card follows the pointer.
     fn preview_card(&mut self) {
         if self.card_busy {
             self.card_dirty = true;
@@ -3147,7 +3162,11 @@ impl Editor {
             }
             gesture @ Gesture::Freehand(_) => self.drawing_request(&gesture),
             Gesture::Brush(points) => self.brush_request(points),
-            Gesture::Shape { start, end, .. } if !moved(start, end) => None,
+            Gesture::Shape { start, end, .. } if !moved(start, end) => {
+                // Back under the click threshold: drop any preview.
+                let _ = self.jobs.send(Job::Refresh);
+                None
+            }
             // The rectangle stays staged for Apply crop.
             Gesture::Crop(_) => None,
             gesture @ Gesture::Shape { .. } => self.drawing_request(&gesture),
@@ -3202,6 +3221,8 @@ impl Editor {
                 | Gesture::Curve { .. }
                 | Gesture::Brush(_)
                 | Gesture::Move { .. }
+                | Gesture::Shape { .. }
+                | Gesture::Freehand(_)
         ) {
             self.preview_outline = None;
             let _ = self.jobs.send(Job::Refresh);
@@ -4588,15 +4609,6 @@ impl Editor {
                 })
             }));
         }
-        match &self.gesture {
-            Some(Gesture::Shape { start, end, .. }) => {
-                points.extend([*start, *end].iter().filter_map(|p| self.to_well(*p)));
-            }
-            Some(Gesture::Freehand(stroke)) => {
-                points.extend(stroke.iter().filter_map(|p| self.to_well(*p)));
-            }
-            _ => {}
-        }
         points.extend(self.text_corners());
         if self.crop.is_some()
             && let Some(r) = self.image_rect()
@@ -4706,25 +4718,8 @@ impl Editor {
                 .collect();
             polyline(dc, &self.g, &screen, true, accent, 1.5)?;
         }
-        match &self.gesture {
-            Some(Gesture::Shape { tool, start, end }) => {
-                let (Some(a), Some(b)) = (self.to_well(*start), self.to_well(*end)) else {
-                    return Ok(());
-                };
-                let corners = [(a.0, a.1), (b.0, a.1), (b.0, b.1), (a.0, b.1)];
-                if open_kind(tool).is_some() {
-                    polyline(dc, &self.g, &[a, b], false, accent, 2.)?;
-                } else {
-                    polyline(dc, &self.g, &corners, true, accent, 1.5)?;
-                }
-            }
-            Some(Gesture::Freehand(points)) => {
-                let screen: Vec<(f32, f32)> =
-                    points.iter().filter_map(|p| self.to_well(*p)).collect();
-                polyline(dc, &self.g, &screen, false, accent, 2.)?;
-            }
-            _ => {}
-        }
+        // A new shape or stroke draws in the canvas pixels the worker
+        // previews (`preview_gesture`), not here.
         self.draw_crop(dc)?;
         self.draw_grips(dc)?;
         self.draw_curve_handles(dc)?;
