@@ -281,8 +281,10 @@ An accepted drop elsewhere fades and shrinks the imprint, then closes the slot
 smoothly: older cards move toward the stack's anchored edge (down on a bottom
 corner, up toward a top corner's top edge) and the card leaves, and the
 window shrinks, only once the slot has closed. Cancelling, a refusal or a drop
-back on the stack returns the card; on the stack it lands in the slot under
-the pointer, like a reorder (a closed dock gap reopens there). A mostly
+back on the stack returns the card. While the drag is back over the stack
+the card eases back into view and the cards it would pass open the slot under
+the pointer; dropped there it lands in that slot, like a reorder (a closed
+dock gap reopens there). A mostly
 vertical press on a card of an expanded stack of two or more reorders instead:
 the card lifts and follows the pointer, the cards it passes glide aside, and on
 release it glides into its slot and the stack's order changes. A pointer that

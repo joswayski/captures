@@ -198,11 +198,15 @@ pub enum DragEnd {
 }
 
 /// One card's file drag out of the stack, from the moment the drag begins
-/// until its end has finished playing.
+/// until its end has finished playing. While the file is back over its own
+/// stack ([`DragOut::hover`]) the card shows again, ready to land.
 #[derive(Clone, Debug)]
 pub struct DragOut {
     style: DragStyle,
     began_ms: f64,
+    /// Whether the file is over its own stack, since when, and the pose it
+    /// eased from.
+    hover: Option<(bool, f64, CardPose)>,
     end: Option<(DragEnd, f64, CardPose)>,
     reduced: bool,
 }
@@ -212,6 +216,7 @@ impl DragOut {
         Self {
             style,
             began_ms: now_ms,
+            hover: None,
             end: None,
             reduced: reduced_motion,
         }
@@ -233,11 +238,24 @@ impl DragOut {
         self.end.map(|(end, ..)| end)
     }
 
+    /// The file came back over its own stack (`over`) or left it again:
+    /// the card eases back into view, slot open, as it would return (hosts
+    /// open its slot where it would land with [`Reorder::hovering`]), or
+    /// back into the style's imprint. Ignored after an end or when nothing
+    /// changes.
+    pub fn hover(&mut self, over: bool, now_ms: f64) {
+        let hovering = self.hover.is_some_and(|(over, ..)| over);
+        if self.end.is_none() && over != hovering {
+            let from = self.away_pose(now_ms);
+            self.hover = Some((over, now_ms, from));
+        }
+    }
+
     /// Whether the card's slot is mostly closed at `now_ms`, as the dock
-    /// leaves it. A file dropped back on the stack then moves its card to
-    /// the new spot at once ([`drop_index`]) and the slot reopens there;
-    /// otherwise the stack glides around it ([`Reorder::landing`]) while
-    /// it returns.
+    /// leaves it. A file dropped back on the stack without hovering it
+    /// first then moves its card to the new spot at once ([`drop_index`])
+    /// and the slot reopens there; otherwise the stack glides around it
+    /// ([`Reorder::landing`]) while it returns.
     pub fn slot_closed(&self, now_ms: f64) -> bool {
         self.pose(now_ms).slot < 0.5
     }
@@ -260,6 +278,14 @@ impl DragOut {
     pub fn moving(&self, now_ms: f64) -> bool {
         match self.end {
             Some(_) => !self.finished(now_ms),
+            None if self.hover.is_some() => self.hover.is_some_and(|(over, at, _)| {
+                let ms = if over {
+                    Self::end_ms(self.style, DragEnd::Returned)
+                } else {
+                    RETURN_MS
+                };
+                !self.reduced && now_ms - at < ms
+            }),
             None => {
                 let away_ms = match self.style {
                     DragStyle::Frosted => FROST_IN_MS,
@@ -291,8 +317,36 @@ impl DragOut {
         curve.ease((elapsed / ms).clamp(0., 1.))
     }
 
-    /// The pose while the file is out, before any end.
+    /// The pose before any end: the style's while the file is out, the
+    /// card's own while the file is back over the stack.
     fn away_pose(&self, now_ms: f64) -> CardPose {
+        match self.hover {
+            None => self.style_pose(now_ms),
+            Some((true, at, from)) => self.returning(from, (now_ms - at).max(0.)),
+            Some((false, at, from)) => CardPose::lerp(
+                from,
+                CardPose::away(self.style),
+                self.progress(now_ms - at, RETURN_MS, SETTLE),
+            ),
+        }
+    }
+
+    /// Returning to rest from `from`, `t` milliseconds in. The dock opens
+    /// its slot first and the card re-forms as it does.
+    fn returning(&self, from: CardPose, t: f64) -> CardPose {
+        if self.style == DragStyle::Dock && !self.reduced {
+            let open = self.progress(t, DOCK_OPEN_MS, DOCK_EASE);
+            let reform = self.progress(t - DOCK_OPEN_MS * DOCK_REFORM_AT, RETURN_MS, DOCK_EASE);
+            let mut pose = CardPose::lerp(from, CardPose::REST, reform);
+            pose.slot = from.slot + (1. - from.slot) * open;
+            pose
+        } else {
+            CardPose::lerp(from, CardPose::REST, self.progress(t, RETURN_MS, SETTLE))
+        }
+    }
+
+    /// The style's pose while the file is out.
+    fn style_pose(&self, now_ms: f64) -> CardPose {
         let t = (now_ms - self.began_ms).max(0.);
         let away = CardPose::away(self.style);
         match self.style {
@@ -332,17 +386,7 @@ impl DragOut {
         };
         let t = (now_ms - at).max(0.);
         match end {
-            DragEnd::Returned if self.style == DragStyle::Dock && !self.reduced => {
-                // The slot opens first; the card re-forms as it does.
-                let open = self.progress(t, DOCK_OPEN_MS, DOCK_EASE);
-                let reform = self.progress(t - DOCK_OPEN_MS * DOCK_REFORM_AT, RETURN_MS, DOCK_EASE);
-                let mut pose = CardPose::lerp(from, CardPose::REST, reform);
-                pose.slot = from.slot + (1. - from.slot) * open;
-                pose
-            }
-            DragEnd::Returned => {
-                CardPose::lerp(from, CardPose::REST, self.progress(t, RETURN_MS, SETTLE))
-            }
+            DragEnd::Returned => self.returning(from, t),
             DragEnd::Dropped => {
                 let gone = self.progress(t, HANDOFF_MS, SETTLE);
                 let close = if self.style == DragStyle::Dock {
@@ -459,6 +503,9 @@ pub struct Reorder {
     carried_top: f64,
     /// Visual y offsets from each card's resting slot, chronological.
     offsets: Vec<f64>,
+    /// A file hovering its own stack ([`Reorder::hovering`]): the card
+    /// waits in the slot it was aimed at instead of following the pointer.
+    aiming: bool,
     dropped: Option<f64>,
     reduced: bool,
 }
@@ -476,8 +523,26 @@ impl Reorder {
             last_ms: now_ms,
             carried_top: Self::slot_top(count, from, top_anchor),
             offsets: vec![0.; count],
+            aiming: false,
             dropped: None,
             reduced,
+        }
+    }
+
+    /// A card whose file is back over its own stack: it and the cards it
+    /// would pass glide to open the slot it is [aimed](Self::aim) at,
+    /// without the carry's lift, and hold there until [`Self::drop`] lands
+    /// it or [`Self::cancel`] sends everything home.
+    pub fn hovering(
+        count: usize,
+        from: usize,
+        top_anchor: bool,
+        now_ms: f64,
+        reduced: bool,
+    ) -> Self {
+        Self {
+            aiming: true,
+            ..Self::new(count, from, top_anchor, now_ms, reduced)
         }
     }
 
@@ -492,11 +557,18 @@ impl Reorder {
         now_ms: f64,
         reduced: bool,
     ) -> Self {
-        let mut reorder = Self::new(count, from, top_anchor, now_ms, reduced);
-        reorder.to = to.min(count.saturating_sub(1));
-        // Let go a lift's length ago, so it has nothing to settle from.
-        reorder.dropped = Some(now_ms - REORDER_LIFT_MS);
+        let mut reorder = Self::hovering(count, from, top_anchor, now_ms, reduced);
+        reorder.aim(to);
+        reorder.drop(now_ms);
         reorder
+    }
+
+    /// Where a hovering card would land now (see [`drop_index`]); its home
+    /// slot when the file has left the stack. Ignored once let go.
+    pub fn aim(&mut self, to: usize) {
+        if self.aiming && self.dropped.is_none() {
+            self.to = to.min(self.count.saturating_sub(1));
+        }
     }
 
     /// The top of chronological `index`'s resting slot in stack content.
@@ -516,7 +588,7 @@ impl Reorder {
     /// The pointer moved the carried card by `dy` points since the press.
     /// It follows the pointer, held within the stack's first and last slot.
     pub fn pointer(&mut self, dy: f64) {
-        if self.dropped.is_some() {
+        if self.aiming || self.dropped.is_some() {
             return;
         }
         let home = Self::slot_top(self.count, self.from, self.top_anchor);
@@ -536,7 +608,7 @@ impl Reorder {
             .map(|index| {
                 let slot = visual_slot(self.count, index, self.top_anchor);
                 if index == self.from {
-                    if self.dropped.is_some() {
+                    if self.aiming || self.dropped.is_some() {
                         (to_slot as f64 - from_slot as f64) * SLOT_PITCH
                     } else {
                         self.carried_top - Self::slot_top(self.count, self.from, self.top_anchor)
@@ -565,7 +637,7 @@ impl Reorder {
         for (index, target) in self.targets().into_iter().enumerate() {
             let offset = &mut self.offsets[index];
             // The carried card follows the pointer exactly until it is let go.
-            if index == self.from && self.dropped.is_none() {
+            if index == self.from && !self.aiming && self.dropped.is_none() {
                 *offset = target;
             } else {
                 *offset += (target - *offset) * k;
@@ -574,7 +646,9 @@ impl Reorder {
                 }
             }
         }
-        let lift = if self.reduced {
+        let lift = if self.aiming {
+            0.
+        } else if self.reduced {
             if self.dropped.is_some() { 0. } else { 1. }
         } else if let Some(at) = self.dropped {
             1. - SETTLE.ease(((now_ms - at) / REORDER_LIFT_MS).clamp(0., 1.))
@@ -587,7 +661,9 @@ impl Reorder {
     /// Let go: the carried card glides into its new slot.
     pub fn drop(&mut self, now_ms: f64) {
         if self.dropped.is_none() {
-            self.dropped = Some(now_ms);
+            // A hovering card has no lift to settle from.
+            let lift = if self.aiming { REORDER_LIFT_MS } else { 0. };
+            self.dropped = Some(now_ms - lift);
         }
     }
 
@@ -595,6 +671,13 @@ impl Reorder {
     pub fn cancel(&mut self, now_ms: f64) {
         self.to = self.from;
         self.drop(now_ms);
+    }
+
+    /// Whether a frame would still move anything. Only a hovering card
+    /// whose stack has opened its aimed slot holds still, until it is aimed
+    /// elsewhere, let go or cancelled.
+    pub fn moving(&self) -> bool {
+        !self.aiming || self.dropped.is_some() || self.offsets != self.targets()
     }
 
     /// Let go and every card has reached its slot: commit `from → to` to the
@@ -939,6 +1022,55 @@ mod tests {
             landing.frame(now).0,
             vec![0., SLOT_PITCH, SLOT_PITCH, -2. * SLOT_PITCH]
         );
+    }
+
+    #[test]
+    fn a_file_back_over_its_stack_shows_its_card_in_the_slot_it_would_land_in() {
+        // The dock's card has left and its gap closed when the file comes
+        // back over the stack: the card re-forms with its slot open.
+        let mut drag = DragOut::new(DragStyle::Dock, 0., false);
+        assert!(drag.slot_closed(1_000.));
+        drag.hover(true, 1_000.);
+        assert!(drag.moving(1_100.));
+        let back = drag.pose(2_000.);
+        assert_eq!((back.opacity, back.slot), (1., 1.));
+        assert!(!drag.moving(2_000.));
+        // Leaving again eases back into the imprint; returning again re-forms.
+        drag.hover(false, 2_000.);
+        assert_eq!(drag.pose(3_000.), CardPose::away(DragStyle::Dock));
+        drag.hover(true, 3_000.);
+        // Dropped while showing, it returns from where it is.
+        drag.end(DragEnd::Returned, 4_000.);
+        assert!(!drag.slot_closed(4_000.));
+        assert_eq!(drag.pose(4_000.).opacity, 1.);
+
+        // A bottom stack of four: card 3 hovers over slot 1, the cards it
+        // would pass make room and it waits there, without a lift.
+        let mut hover = Reorder::hovering(4, 3, false, 0., false);
+        hover.pointer(-500.);
+        hover.aim(1);
+        let mut now = 0.;
+        while hover.moving() {
+            now += 16.;
+            assert_eq!(hover.frame(now).1, 0.);
+            assert!(now < 1_000.);
+        }
+        let open = vec![0., SLOT_PITCH, SLOT_PITCH, -2. * SLOT_PITCH];
+        assert_eq!(hover.frame(now).0, open);
+        assert!(!hover.settled(now + 1_000.));
+        // Off the stack it aims home and everything glides back; aimed again
+        // and let go, it lands there.
+        hover.aim(3);
+        assert!(hover.moving());
+        hover.aim(1);
+        hover.drop(now);
+        while !hover.settled(now) {
+            now += 16.;
+            hover.frame(now);
+            assert!(now < 2_000.);
+        }
+        assert_eq!((hover.from(), hover.to()), (3, 1));
+        assert_eq!(hover.frame(now).0, open);
     }
 
     #[test]

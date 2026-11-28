@@ -275,12 +275,14 @@ fn set_image(data: &IDataObject, icon: &Icon) {
     }
 }
 
-/// Make `hwnd` (the mini preview stack) take a file drag while `accepts`
-/// says it is the stack's own, so a card dragged back onto its stack shows
-/// the copy cursor instead of "no drop". Where it lands is decided when the
-/// drag ends ([`landing`] at [`Outcome::point`]).
-pub fn register_target(hwnd: HWND, accepts: fn() -> bool) {
-    let target: IDropTarget = OwnDrops(accepts).into();
+/// Make `hwnd` (the mini preview stack) take a file drag while `over` says
+/// it is the stack's own, so a card dragged back onto its stack shows the
+/// copy cursor instead of "no drop". `over` hears the pointer's screen
+/// position while the drag is over the window and `None` once it leaves,
+/// so the stack can open a slot under it. Where it lands is decided when
+/// the drag ends ([`landing`] at [`Outcome::point`]).
+pub fn register_target(hwnd: HWND, over: fn(Option<POINT>) -> bool) {
+    let target: IDropTarget = OwnDrops(over).into();
     if let Err(error) = ensure_ole().and_then(|()| unsafe { RegisterDragDrop(hwnd, &target) }) {
         eprintln!("mini preview drop target: {error}");
     }
@@ -293,12 +295,16 @@ pub fn revoke_target(hwnd: HWND) {
 }
 
 #[implement(IDropTarget)]
-struct OwnDrops(fn() -> bool);
+struct OwnDrops(fn(Option<POINT>) -> bool);
 
 impl OwnDrops_Impl {
-    fn answer(&self, effect: *mut DROPEFFECT) -> Result<()> {
+    fn answer(&self, point: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
+        let point = POINT {
+            x: point.x,
+            y: point.y,
+        };
         unsafe {
-            *effect = if (self.0)() {
+            *effect = if (self.0)(Some(point)) {
                 DROPEFFECT((*effect).0 & DROPEFFECT_COPY.0)
             } else {
                 DROPEFFECT_NONE
@@ -313,17 +319,23 @@ impl IDropTarget_Impl for OwnDrops_Impl {
         &self,
         _: Ref<IDataObject>,
         _: MODIFIERKEYS_FLAGS,
-        _: &POINTL,
+        point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        self.answer(effect)
+        self.answer(point, effect)
     }
 
-    fn DragOver(&self, _: MODIFIERKEYS_FLAGS, _: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
-        self.answer(effect)
+    fn DragOver(
+        &self,
+        _: MODIFIERKEYS_FLAGS,
+        point: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> Result<()> {
+        self.answer(point, effect)
     }
 
     fn DragLeave(&self) -> Result<()> {
+        (self.0)(None);
         Ok(())
     }
 
@@ -331,10 +343,10 @@ impl IDropTarget_Impl for OwnDrops_Impl {
         &self,
         _: Ref<IDataObject>,
         _: MODIFIERKEYS_FLAGS,
-        _: &POINTL,
+        point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        self.answer(effect)
+        self.answer(point, effect)
     }
 }
 

@@ -1944,6 +1944,8 @@ final class MiniPreviewView: NSView {
     private(set) var artifactIDs: [String] = []
     /// A card carried up or down the stack (`captures_preview_reorder_*`).
     private var reorder: (handle: OpaquePointer, id: String)?
+    /// `reorder` opens a slot for a file hovering the stack (`hoverDragOut`).
+    private var hoverReorder = false
     private var reorderOffsets: [String: CGFloat] = [:]
     /// The card whose file is out and its drag style's pose.
     private(set) var dragOut: (id: String, pose: CapturesPreviewDragPose)?
@@ -2835,6 +2837,7 @@ final class MiniPreviewView: NSView {
         reorderTimer?.invalidate(); reorderTimer = nil
         captures_preview_reorder_free_v1(current.handle)
         reorder = nil
+        hoverReorder = false
         reorderOffsets.removeAll()
         if let card = cards[current.id] { card.carrying = false; card.setReorderLift(0) }
     }
@@ -2877,14 +2880,56 @@ final class MiniPreviewView: NSView {
     /// the slot under the pointer, or nil when the stack cannot move it.
     func landing(for id: String, at screenPoint: NSPoint) -> (from: Int, to: Int)? {
         guard !stackCollapsed, reorder == nil, exitingArtifactIDs.isEmpty, artifactIDs.count >= 2,
-              let window, let from = artifactIDs.firstIndex(of: id), let card = cards[id] else { return nil }
+              let from = artifactIDs.firstIndex(of: id), let to = slot(for: id, at: screenPoint)
+        else { return nil }
+        return (from, to)
+    }
+
+    /// The chronological slot nearest `screenPoint` for `id`'s card.
+    private func slot(for id: String, at screenPoint: NSPoint) -> Int? {
+        guard let window, let card = cards[id] else { return nil }
         let y = document.convert(window.convertPoint(fromScreen: screenPoint), from: nil).y
         let half = card.frame.height / 2
         let distance = { (index: Int) -> CGFloat in
             self.restLayouts[self.artifactIDs[index]].map { abs(CGFloat($0.y) + half - y) } ?? .infinity
         }
-        guard let to = artifactIDs.indices.min(by: { distance($0) < distance($1) }) else { return nil }
-        return (from, to)
+        return artifactIDs.indices.min(by: { distance($0) < distance($1) })
+    }
+
+    /// `id`'s file is back over the stack at `screenPoint`, or left it
+    /// (nil): the cards it would pass open the slot under the pointer (its
+    /// home slot once the file left), until `landHover` or `cancelHover`.
+    func hoverDragOut(_ id: String, at screenPoint: NSPoint?) {
+        guard let from = artifactIDs.firstIndex(of: id) else { return }
+        let to = screenPoint.flatMap { slot(for: id, at: $0) } ?? from
+        if reorder == nil, to != from, !stackCollapsed, exitingArtifactIDs.isEmpty, let card = cards[id],
+           let handle = captures_preview_reorder_hovering_v1(artifactIDs.count, from, anchoredAtTop,
+                                                             Self.nowMs, NativeMotion.reduceMotion) {
+            startReorder(handle, id: id, card: card)
+            hoverReorder = true
+        }
+        guard hoverReorder, let reorder, reorder.id == id else { return }
+        captures_preview_reorder_aim_v1(reorder.handle, to)
+        tickReorder()
+    }
+
+    /// `id`'s file was dropped on the stack at `screenPoint` while hovering
+    /// it: the card lands in the slot there. False when no slot was open.
+    func landHover(_ id: String, at screenPoint: NSPoint) -> Bool {
+        guard hoverReorder, let reorder, reorder.id == id else { return false }
+        if let to = slot(for: id, at: screenPoint) { captures_preview_reorder_aim_v1(reorder.handle, to) }
+        hoverReorder = false
+        captures_preview_reorder_release_v1(reorder.handle, false, Self.nowMs)
+        tickReorder()
+        return true
+    }
+
+    /// `id`'s drag ended anywhere else: a slot opened for it closes.
+    func cancelHover(_ id: String) {
+        guard hoverReorder, let reorder, reorder.id == id else { return }
+        hoverReorder = false
+        captures_preview_reorder_release_v1(reorder.handle, true, Self.nowMs)
+        tickReorder()
     }
 
     /// The card returns into chronological `to` as if carried there: the
@@ -3192,11 +3237,20 @@ final class MiniPreviewPanel: NSPanel {
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "Screenshot mini previews")
     }
 
+    /// One of the stack's own cards is dragged over it, at this screen
+    /// point, or left it (nil).
+    var dragHover: (NSPoint?) -> Void = { _ in }
+
     @objc func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard let url = sender.draggingPasteboard.string(forType: .fileURL).flatMap(URL.init(string:)),
               previewView.containsPreparedDragPath(url.path) else { return [] }
+        dragHover(convertPoint(toScreen: sender.draggingLocation))
         return .copy
     }
+
+    @objc func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+
+    @objc func draggingExited(_ sender: NSDraggingInfo?) { dragHover(nil) }
 
     @objc func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         draggingEntered(sender).contains(.copy)
@@ -3821,9 +3875,18 @@ final class MiniPreviewController {
         drag.start()
     }
 
+    /// The card's file is back over its stack at `point` (screen), or left
+    /// it (nil): the card shows again in the slot it would land in.
+    private func hoverDragOut(at point: NSPoint?) {
+        guard let drag = dragOut else { return }
+        drag.hover(point != nil)
+        panel?.previewView.hoverDragOut(drag.artifactID, at: point)
+    }
+
     /// Returns whether this card's drag style was playing.
     @discardableResult
     private func endDragOut(_ artifactID: String, dropped: Bool) -> Bool {
+        panel?.previewView.cancelHover(artifactID)
         guard let drag = dragOut, drag.artifactID == artifactID else { return false }
         drag.end(dropped: dropped)
         return true
@@ -3835,6 +3898,11 @@ final class MiniPreviewController {
     /// cards it passes glide out of its way while it returns.
     private func landDragOut(_ artifactID: String, at point: NSPoint) {
         let view = panel?.previewView
+        // Hovering, the stack already opened a slot: land there.
+        if view?.landHover(artifactID, at: point) == true {
+            endDragOut(artifactID, dropped: false)
+            return
+        }
         let landing = view?.landing(for: artifactID, at: point)
         let closed = view?.dragOut.map { $0.id == artifactID && $0.pose.slot < 0.5 } ?? false
         endDragOut(artifactID, dropped: false)
@@ -3951,6 +4019,7 @@ final class MiniPreviewController {
             next.previewView.setPreparedDragPath(prepared.path, for: id)
         }
         next.previewView.setDragBegan { [weak self] id in self?.beginDragOut(id) }
+        next.dragHover = { [weak self] point in self?.hoverDragOut(at: point) }
         next.previewView.reorderCommitted = { [weak self] id, index in self?.commitReorder(id, to: index) }
         next.previewView.setDragEnded { [weak self] id, point, operation in
             guard let self else { return }
