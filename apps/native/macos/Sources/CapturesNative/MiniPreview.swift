@@ -2766,6 +2766,8 @@ final class MiniPreviewView: NSView {
         dragOut = (id, pose)
         cards[id]?.applyDragPose(pose)
         layoutTransient()
+        // A held hovering reorder follows the slot the pose opens.
+        if reorderTimer == nil, reorder?.id == id { tickReorder() }
     }
 
     func clearDragOut(_ id: String) {
@@ -2791,9 +2793,6 @@ final class MiniPreviewView: NSView {
         reorder = (handle, id)
         if let owner = tooltipOwner { setTooltip(for: owner, visible: false) }
         card.carrying = true
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tickReorder() }
-        RunLoop.main.add(timer, forMode: .common)
-        reorderTimer = timer
         tickReorder()
     }
 
@@ -2829,7 +2828,19 @@ final class MiniPreviewView: NSView {
                                                         &lift, &from, &to)
         for (index, id) in artifactIDs.enumerated() { reorderOffsets[id] = CGFloat(offsets[index]) }
         cards[current.id]?.setReorderLift(CGFloat(lift))
-        guard settled else { layoutTransient(); return }
+        guard settled else {
+            layoutTransient()
+            // A hovering file holds its open slot without ticking; the next
+            // aim, pointer step, drag pose or release ticks again.
+            if !captures_preview_reorder_moving_v1(current.handle) {
+                reorderTimer?.invalidate(); reorderTimer = nil
+            } else if reorderTimer == nil {
+                let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tickReorder() }
+                RunLoop.main.add(timer, forMode: .common)
+                reorderTimer = timer
+            }
+            return
+        }
         stopReorder()
         // The cards already sit in their new slots, where the rebuilt stack
         // lays them out without offsets.
@@ -4050,6 +4061,8 @@ final class MiniPreviewController {
         if let previous {
             next.previewView.continueFileDrags(from: previous.previewView)
         }
+        // A held drag pose no longer ticks: show it on the rebuilt stack.
+        dragOut?.reapply()
         for id in liveIDs {
             next.previewView.card(for: id)?.setMainActionBusy(busyActions[id] == cardGenerations[id] && busyActions[id] != nil)
             next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false,

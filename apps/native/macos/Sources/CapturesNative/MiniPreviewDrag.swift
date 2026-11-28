@@ -13,12 +13,15 @@ func centredScale(_ s: CGFloat, of layer: CALayer) -> CATransform3D {
 /// One card's file drag out of the stack (`captures_app::preview_drag_style`):
 /// the shared model owns the curves; this owns the clock. The timer runs in
 /// the common run loop modes, which include the drag session's tracking.
+/// It runs only while the pose changes: a held pose re-applied every frame
+/// re-committed the stack for the whole drag.
 final class MiniPreviewDragOut {
     let artifactID: String
     private var handle: OpaquePointer?
     private var timer: Timer?
     private var dropped = false
     private var ended = false
+    private var applied: CapturesPreviewDragPose?
     /// The pose to show each frame.
     var apply: (CapturesPreviewDragPose) -> Void = { _ in }
     /// The end finished playing: the card is back at rest, or (`true`) gone
@@ -37,11 +40,11 @@ final class MiniPreviewDragOut {
 
     private static var now: Double { CACurrentMediaTime() * 1000 }
 
-    func start() {
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-        tick()
+    func start() { tick() }
+
+    /// Show the last pose again, on a rebuilt stack.
+    func reapply() {
+        if let applied { apply(applied) }
     }
 
     func end(dropped: Bool) {
@@ -77,12 +80,28 @@ final class MiniPreviewDragOut {
 
     private func tick() {
         guard let handle else { return }
+        let now = Self.now
         var pose = CapturesPreviewDragPose()
-        let done = captures_preview_drag_out_pose_v1(handle, Self.now, &pose)
-        apply(pose)
-        guard done else { return }
-        stop()
-        completed(dropped)
+        let done = captures_preview_drag_out_pose_v1(handle, now, &pose)
+        if applied.map({ !Self.same($0, pose) }) ?? true {
+            applied = pose
+            apply(pose)
+        }
+        if done {
+            stop()
+            completed(dropped)
+        } else if captures_preview_drag_out_moving_v1(handle, now) {
+            guard timer == nil else { return }
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        } else {
+            timer?.invalidate(); timer = nil
+        }
+    }
+
+    private static func same(_ a: CapturesPreviewDragPose, _ b: CapturesPreviewDragPose) -> Bool {
+        withUnsafeBytes(of: a) { a in withUnsafeBytes(of: b) { b in a.elementsEqual(b) } }
     }
 }
 

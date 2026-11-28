@@ -2649,23 +2649,30 @@ impl Stack {
         let open = pad * frame.clip_open as f32;
         let corner = radius * (1. - frame.clip_open as f32);
         let clip = rect(r.left - open, r.top - open, r.right + open, r.bottom + open);
+        // Open, the clip is a plain rectangle (from 70 %, while survivors
+        // slide): a scissor clip draws the same without the mask layer's
+        // offscreen pass each frame.
+        let mut layer = (frame.clip_open < 1.).then(|| D2D1_LAYER_PARAMETERS1 {
+            contentBounds: clip,
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.,
+            ..Default::default()
+        });
         unsafe {
-            let mask = dc
-                .GetFactory()?
-                .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
-                    rect: clip,
-                    radiusX: corner,
-                    radiusY: corner,
-                })?;
-            let mut layer = D2D1_LAYER_PARAMETERS1 {
-                contentBounds: clip,
-                geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
-                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                maskTransform: Matrix3x2::identity(),
-                opacity: 1.,
-                ..Default::default()
-            };
-            dc.PushLayer(&layer, None::<&ID2D1Layer>);
+            if let Some(layer) = layer.as_mut() {
+                let mask = dc
+                    .GetFactory()?
+                    .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+                        rect: clip,
+                        radiusX: corner,
+                        radiusY: corner,
+                    })?;
+                layer.geometricMask = std::mem::ManuallyDrop::new(Some(mask.cast()?));
+                dc.PushLayer(layer, None::<&ID2D1Layer>);
+            } else {
+                dc.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            }
             for (i, particle) in dust.particles.iter().enumerate() {
                 let visual = preview_motion::dust_visual_at(particle, elapsed);
                 let alpha = (visual.opacity * frame.layer_opacity) as f32;
@@ -2697,9 +2704,13 @@ impl Stack {
                 );
             }
             dc.SetTransform(&base);
-            dc.PopLayer();
-            // Release the mask reference the parameters own.
-            std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+            if let Some(layer) = layer.as_mut() {
+                dc.PopLayer();
+                // Release the mask reference the parameters own.
+                std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+            } else {
+                dc.PopAxisAlignedClip();
+            }
         }
         Ok(())
     }

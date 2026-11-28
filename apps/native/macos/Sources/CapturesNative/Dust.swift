@@ -453,9 +453,10 @@ enum DustDissolve {
         let mask = CAShapeLayer()
         mask.frame = layer.bounds
         layer.mask = mask
+        let open = 0.7
         let paths: [CGPath] = times.map { time in
             let linear = time / duration
-            let opening = linear <= 0.08 ? 0 : linear >= 0.7 ? 1
+            let opening = linear <= 0.08 ? 0 : linear >= open ? 1
                 : cubicBezierProgress(0.33, 0, 0.2, 1, (linear - 0.08) / 0.62)
             let inset = pad * CGFloat(1 - opening)
             let corner = radius * CGFloat(1 - opening)
@@ -463,6 +464,16 @@ enum DustDissolve {
                           cornerWidth: corner, cornerHeight: corner, transform: nil)
         }
         animate(mask, key: "path", values: paths, duration: duration)
+        // Once open the clip is the layer's bounds for good, but a mask still
+        // costs an offscreen pass of every chip each frame, right while the
+        // survivors slide (from 1.8 s). Clipping to the bounds draws the same.
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration * open + 1.0 / 30) { [weak layer, weak mask] in
+            guard let layer, let mask, layer.mask === mask else { return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            layer.masksToBounds = true
+            layer.mask = nil
+            CATransaction.commit()
+        }
         animate(layer, key: "opacity", values: times.map { time -> NSNumber in
             let linear = time / duration
             let fade = linear <= 0.7 ? 0 : linear >= 0.9 ? 1

@@ -1357,6 +1357,20 @@ pub unsafe extern "C" fn captures_preview_drag_out_pose_v1(
     handle.0.finished(now_ms)
 }
 
+/// Whether the pose still changes at `now_ms` (see `DragOut::moving`).
+/// Hosts may stop ticking while it holds, until hover_v1 or end_v1. Null
+/// returns false.
+/// # Safety
+/// Handle is live or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_drag_out_moving_v1(
+    handle: *const CapturesPreviewDragOut,
+    now_ms: f64,
+) -> bool {
+    // SAFETY: Caller guarantees null or live storage.
+    unsafe { handle.as_ref() }.is_some_and(|handle| handle.0.moving(now_ms))
+}
+
 /// How far a card older than a closing slot moves toward the anchored edge
 /// (points, y down) for that slot's `slot` value.
 #[unsafe(no_mangle)]
@@ -1556,6 +1570,19 @@ pub unsafe extern "C" fn captures_preview_reorder_frame_v1(
         }
     }
     handle.0.settled(now_ms)
+}
+
+/// Whether a frame would still move anything (see `Reorder::moving`): only
+/// a hovering reorder that has opened its slot holds still, until aim_v1,
+/// set_slot_v1 or release_v1. Null returns false.
+/// # Safety
+/// Handle is live or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_moving_v1(
+    handle: *const CapturesPreviewReorder,
+) -> bool {
+    // SAFETY: Caller guarantees null or live storage.
+    unsafe { handle.as_ref() }.is_some_and(|handle| handle.0.moving())
 }
 
 /// Preferences' looping preview of a style (see `preview_drag_style::demo`).
@@ -2328,9 +2355,15 @@ mod tests {
             // Dock (1): away, then a return plays out and finishes at rest.
             let drag = captures_preview_drag_out_new_v1(1, 0., false);
             let mut pose = CapturesPreviewDragPose::default();
+            // It moves while it leaves, holds once away, and moves again
+            // once it ends.
+            assert!(captures_preview_drag_out_moving_v1(drag, 100.));
             assert!(!captures_preview_drag_out_pose_v1(drag, 1_000., &mut pose));
             assert_eq!((pose.opacity, pose.slot), (0., 0.));
+            assert!(!captures_preview_drag_out_moving_v1(drag, 1_000.));
             captures_preview_drag_out_end_v1(drag, false, 1_000.);
+            assert!(captures_preview_drag_out_moving_v1(drag, 1_000.));
+            assert!(!captures_preview_drag_out_moving_v1(null(), 1_000.));
             assert!(captures_preview_drag_out_pose_v1(drag, 5_000., &mut pose));
             assert_eq!(pose, CardPose::REST.into());
             captures_preview_drag_out_free_v1(drag);
@@ -2370,6 +2403,7 @@ mod tests {
             ));
             assert_eq!((from, to, lift), (0, 2, 1.));
             assert_eq!(offsets[1], -preview_drag_style::SLOT_PITCH);
+            assert!(captures_preview_reorder_moving_v1(reorder));
             captures_preview_reorder_release_v1(reorder, false, 32.);
             assert!(captures_preview_reorder_frame_v1(
                 reorder,

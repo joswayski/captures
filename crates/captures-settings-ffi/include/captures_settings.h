@@ -435,8 +435,10 @@ bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, doubl
  * slot once the file left) until release_v1 lands it or cancels. While the
  * card's file is out, set_slot_v1(pose.slot) before each frame hands its
  * closing slot to the reorder: leave that card out of closing_shift_v1
- * until the reorder ends. Calls on one handle must never overlap;
- * free each handle exactly once. */
+ * until the reorder ends. A host may stop ticking while drag_out_moving_v1
+ * or reorder_moving_v1 is false (the pose or slot holds), until the next
+ * hover, end, aim, pointer, set_slot or release. Calls on one handle must
+ * never overlap; free each handle exactly once. */
 typedef struct {
     double opacity, scale, media_blur, media_opacity, media_scale, fill_opacity,
         chrome_opacity, hairline, well, glyph, glyph_scale, slot;
@@ -449,6 +451,7 @@ void captures_preview_drag_out_end_v1(CapturesPreviewDragOut *handle, bool dropp
 void captures_preview_drag_out_hover_v1(CapturesPreviewDragOut *handle, bool over, double now_ms);
 bool captures_preview_drag_out_pose_v1(const CapturesPreviewDragOut *handle, double now_ms,
     CapturesPreviewDragPose *output);
+bool captures_preview_drag_out_moving_v1(const CapturesPreviewDragOut *handle, double now_ms);
 double captures_preview_closing_shift_v1(double slot, bool top_anchor);
 uint32_t captures_preview_press_intent_v1(double dx, double dy, size_t count);
 bool captures_preview_reorder_escapes_v1(double dx_outside, double beyond);
@@ -466,6 +469,7 @@ void captures_preview_reorder_pointer_v1(CapturesPreviewReorder *handle, double 
 void captures_preview_reorder_release_v1(CapturesPreviewReorder *handle, bool cancel, double now_ms);
 bool captures_preview_reorder_frame_v1(CapturesPreviewReorder *handle, double now_ms,
     double *offsets, size_t capacity, double *lift, size_t *from, size_t *to);
+bool captures_preview_reorder_moving_v1(const CapturesPreviewReorder *handle);
 typedef struct {
     double card_tops[3];
     double card_left;
