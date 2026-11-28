@@ -503,6 +503,11 @@ pub struct Reorder {
     carried_top: f64,
     /// Visual y offsets from each card's resting slot, chronological.
     offsets: Vec<f64>,
+    /// How much of its slot the carried card takes ([`Self::set_slot`]).
+    slot: f64,
+    /// Whether a frame has run (before it, [`Self::set_slot`] places the
+    /// cards where the closing slot already holds them).
+    framed: bool,
     /// A file hovering its own stack ([`Reorder::hovering`]): the card
     /// waits in the slot it was aimed at instead of following the pointer.
     aiming: bool,
@@ -523,6 +528,8 @@ impl Reorder {
             last_ms: now_ms,
             carried_top: Self::slot_top(count, from, top_anchor),
             offsets: vec![0.; count],
+            slot: 1.,
+            framed: false,
             aiming: false,
             dropped: None,
             reduced,
@@ -571,6 +578,28 @@ impl Reorder {
         }
     }
 
+    /// How much of its slot the carried card takes now, while its file
+    /// drag's imprint closes or reopens it (`DragOut::pose(now).slot`;
+    /// 1, the default, for a plain carry). Call it before each frame. The
+    /// reorder then moves the cards beyond that slot for it, so hosts leave
+    /// the carried card out of their [`closing_shift`] while it runs.
+    ///
+    /// The cards glide toward one layout, the carried card's slot (open as
+    /// far as `open`) at the spot it would land, so the slot opening where
+    /// the card left and the cards moving aside never add up: a card the
+    /// closed slot already moved where it belongs holds still.
+    pub fn set_slot(&mut self, open: f64) {
+        let open = open.clamp(0., 1.);
+        if !self.framed {
+            // The cards start where the host's closing shift drew them.
+            let closed = closing_shift(open, self.top_anchor);
+            for offset in &mut self.offsets[..self.from] {
+                *offset += closed - closing_shift(self.slot, self.top_anchor);
+            }
+        }
+        self.slot = open;
+    }
+
     /// The top of chronological `index`'s resting slot in stack content.
     pub fn slot_top(count: usize, index: usize, top_anchor: bool) -> f64 {
         first_slot(top_anchor) + visual_slot(count, index, top_anchor) as f64 * SLOT_PITCH
@@ -600,6 +629,7 @@ impl Reorder {
 
     /// Where each card should sit now, as visual offsets from its slot.
     fn targets(&self) -> Vec<f64> {
+        let closed = closing_shift(self.slot, self.top_anchor);
         let (from_slot, to_slot) = (
             visual_slot(self.count, self.from, self.top_anchor),
             visual_slot(self.count, self.to, self.top_anchor),
@@ -607,7 +637,20 @@ impl Reorder {
         (0..self.count)
             .map(|index| {
                 let slot = visual_slot(self.count, index, self.top_anchor);
-                if index == self.from {
+                // Its chronological index once the carried card lands at `to`;
+                // older (lower) ones sit beyond it from the anchored edge.
+                let landed = if index == self.from {
+                    self.to
+                } else if self.from < index && index <= self.to {
+                    index - 1
+                } else if self.to <= index && index < self.from {
+                    index + 1
+                } else {
+                    index
+                };
+                // Beyond the carried card's slot, from the anchored edge.
+                let beyond = if landed < self.to { closed } else { 0. };
+                let offset = if index == self.from {
                     if self.aiming || self.dropped.is_some() {
                         (to_slot as f64 - from_slot as f64) * SLOT_PITCH
                     } else {
@@ -619,7 +662,8 @@ impl Reorder {
                     SLOT_PITCH
                 } else {
                     0.
-                }
+                };
+                beyond + offset
             })
             .collect()
     }
@@ -634,6 +678,7 @@ impl Reorder {
         } else {
             1. - (-dt / REORDER_GLIDE_TAU_MS).exp()
         };
+        self.framed = true;
         for (index, target) in self.targets().into_iter().enumerate() {
             let offset = &mut self.offsets[index];
             // The carried card follows the pointer exactly until it is let go.
@@ -675,7 +720,7 @@ impl Reorder {
 
     /// Whether a frame would still move anything. Only a hovering card
     /// whose stack has opened its aimed slot holds still, until it is aimed
-    /// elsewhere, let go or cancelled.
+    /// elsewhere, let go or cancelled, or its [slot](Self::set_slot) moves.
     pub fn moving(&self) -> bool {
         !self.aiming || self.dropped.is_some() || self.offsets != self.targets()
     }
@@ -686,9 +731,7 @@ impl Reorder {
         let Some(at) = self.dropped else {
             return false;
         };
-        let targets = self.targets();
-        (self.reduced || now_ms - at >= REORDER_LIFT_MS)
-            && self.offsets.iter().zip(&targets).all(|(o, t)| o == t)
+        (self.reduced || now_ms - at >= REORDER_LIFT_MS) && self.offsets == self.targets()
     }
 }
 
@@ -1071,6 +1114,54 @@ mod tests {
         }
         assert_eq!((hover.from(), hover.to()), (3, 1));
         assert_eq!(hover.frame(now).0, open);
+    }
+
+    #[test]
+    fn a_file_back_over_a_closed_dock_gap_opens_its_new_slot_without_jumping_cards() {
+        // Three cards, the middle one's dock gap closed (the oldest moved
+        // into it), when its file comes back over the stack aimed at either
+        // end. The slot opens where it would land; no card ever passes its
+        // end spot or doubles back, and one that is already there holds.
+        for top in [false, true] {
+            for to in [0, 2] {
+                let mut drag = DragOut::new(DragStyle::Dock, 0., false);
+                drag.hover(true, 1_000.);
+                let mut hover = Reorder::hovering(3, 1, top, 1_000., false);
+                hover.set_slot(drag.pose(1_000.).slot);
+                let start = hover.frame(1_000.).0;
+                assert_eq!(start, vec![closing_shift(0., top), 0., 0.], "{top} {to}");
+                hover.aim(to);
+                let mut frames = vec![start.clone()];
+                let mut now = 1_000.;
+                while now < 2_500. {
+                    now += 16.;
+                    hover.set_slot(drag.pose(now).slot);
+                    frames.push(hover.frame(now).0);
+                }
+                assert!(!hover.moving(), "{top} {to}");
+                let end = frames.last().unwrap().clone();
+                // The slot is open at `to`, as a plain reorder lays it out.
+                let mut open = Reorder::hovering(3, 1, top, 0., true);
+                open.aim(to);
+                assert_eq!(end, open.frame(0.).0, "{top} {to}");
+                for card in [0, 2] {
+                    let (from, to_y) = (start[card], end[card]);
+                    let mut last = from;
+                    for frame in &frames {
+                        let y = frame[card];
+                        assert!(
+                            y >= from.min(to_y) - 0.5 && y <= from.max(to_y) + 0.5,
+                            "card {card} overshot ({top}, to {to}): {y} not in {from}..{to_y}"
+                        );
+                        assert!(
+                            (y - last) * (to_y - from) >= -1e-9,
+                            "card {card} doubled back ({top}, to {to}): {last} -> {y}"
+                        );
+                        last = y;
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -1455,6 +1455,23 @@ pub unsafe extern "C" fn captures_preview_reorder_aim_v1(
     }
 }
 
+/// How much of its slot the carried card takes now (its drag-out pose's
+/// `slot`, 1 for a plain carry), before each frame; the reorder then moves
+/// the cards beyond that slot, so leave it out of `closing_shift_v1` while
+/// the reorder runs (see `Reorder::set_slot`).
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_set_slot_v1(
+    handle: *mut CapturesPreviewReorder,
+    open: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        handle.0.set_slot(open);
+    }
+}
+
 /// # Safety
 /// A non-null handle must be live, uniquely owned and freed exactly once.
 #[unsafe(no_mangle)]

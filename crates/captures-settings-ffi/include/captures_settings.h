@@ -432,7 +432,10 @@ bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, doubl
  * let go at `to` (a file dropped back on the stack). While the file is back
  * over its stack, drag_out_hover_v1(true) shows the card again (false when
  * it leaves), and reorder_hovering_v1 opens the slot aim_v1 names (its home
- * slot once the file left) until release_v1 lands it or cancels. Calls on one handle must never overlap;
+ * slot once the file left) until release_v1 lands it or cancels. While the
+ * card's file is out, set_slot_v1(pose.slot) before each frame hands its
+ * closing slot to the reorder: leave that card out of closing_shift_v1
+ * until the reorder ends. Calls on one handle must never overlap;
  * free each handle exactly once. */
 typedef struct {
     double opacity, scale, media_blur, media_opacity, media_scale, fill_opacity,
@@ -457,6 +460,7 @@ CapturesPreviewReorder *captures_preview_reorder_landing_v1(size_t count, size_t
 CapturesPreviewReorder *captures_preview_reorder_hovering_v1(size_t count, size_t from,
     bool top_anchor, double now_ms, bool reduced_motion);
 void captures_preview_reorder_aim_v1(CapturesPreviewReorder *handle, size_t to);
+void captures_preview_reorder_set_slot_v1(CapturesPreviewReorder *handle, double open);
 void captures_preview_reorder_free_v1(CapturesPreviewReorder *handle);
 void captures_preview_reorder_pointer_v1(CapturesPreviewReorder *handle, double dy);
 void captures_preview_reorder_release_v1(CapturesPreviewReorder *handle, bool cancel, double now_ms);

@@ -1006,10 +1006,12 @@ impl Pile {
             let settled = !imp.collapsed.get() && imp.exits.borrow().is_empty();
             let mut carried = imp.carried.borrow_mut();
             if carried.is_none() && settled && to != from {
+                let mut model = Reorder::hovering(count, from, top, now, self.reduced());
+                let offsets = self.take_slot(&id, &mut model, now);
                 *carried = Some(Carried {
                     id: id.clone(),
-                    model: Reorder::hovering(count, from, top, now, self.reduced()),
-                    offsets: vec![0.; count],
+                    model,
+                    offsets,
                     lift: 0.,
                     moving: true,
                     home_top,
@@ -1075,10 +1077,12 @@ impl Pile {
         if closed {
             self.commit_move(id, from, to);
         } else {
+            let mut model = Reorder::landing(count, from, to, top, now, self.reduced());
+            let offsets = self.take_slot(id, &mut model, now);
             *imp.carried.borrow_mut() = Some(Carried {
                 id: id.to_owned(),
-                model: Reorder::landing(count, from, to, top, now, self.reduced()),
-                offsets: vec![0.; count],
+                model,
+                offsets,
                 lift: 0.,
                 moving: true,
                 home_top,
@@ -1086,6 +1090,25 @@ impl Pile {
         }
         self.animate();
         true
+    }
+
+    /// How much of its slot `id`'s card takes while its file drag plays.
+    fn slot_open(&self, id: &str, now: f64) -> f64 {
+        self.imp()
+            .drags
+            .borrow()
+            .iter()
+            .find(|drag| drag.id == id)
+            .map_or(1., |drag| drag.model.pose(now).slot)
+    }
+
+    /// Hand `id`'s closing slot to `model` ([`Reorder::set_slot`]), which
+    /// then starts every card where the slot holds it now, so the slot
+    /// reopening and the cards making room never add up to a jump. Returns
+    /// the first frame's offsets.
+    fn take_slot(&self, id: &str, model: &mut Reorder, now: f64) -> Vec<f64> {
+        model.set_slot(self.slot_open(id, now));
+        model.frame(now).0
     }
 
     /// Each dragged card's pose now and how much hover look it keeps.
@@ -1267,6 +1290,7 @@ impl Pile {
             let Some(carried) = carried.as_mut() else {
                 return;
             };
+            carried.model.set_slot(self.slot_open(&carried.id, now));
             let (offsets, lift) = carried.model.frame(now);
             carried.moving = offsets != carried.offsets || lift != carried.lift;
             carried.offsets = offsets;
@@ -1954,17 +1978,19 @@ impl Pile {
         }
         // File drags close their slots toward the anchored edge, and a
         // carried card's neighbours glide out of its way.
+        // A carried card's slot moves with its reorder instead.
         let poses = self.drag_poses(self.drag_now());
-        let closing: Vec<(usize, f64)> = cards
-            .iter()
-            .enumerate()
-            .filter_map(|(index, card)| Some((index, poses.get(&card.id)?.0.slot)))
-            .collect();
-        let closing = closing_offsets(count, &closing, top);
         let carried = imp.carried.borrow();
         let carried = carried
             .as_ref()
             .filter(|carried| carried.offsets.len() == count);
+        let closing: Vec<(usize, f64)> = cards
+            .iter()
+            .enumerate()
+            .filter(|(_, card)| carried.is_none_or(|carried| carried.id != card.id))
+            .filter_map(|(index, card)| Some((index, poses.get(&card.id)?.0.slot)))
+            .collect();
+        let closing = closing_offsets(count, &closing, top);
         for (index, card) in cards.iter().enumerate() {
             let depth = count - 1 - index;
             let moved = closing[index] + carried.map_or(0., |carried| carried.offsets[index]);
