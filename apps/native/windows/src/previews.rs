@@ -633,6 +633,46 @@ impl Stack {
         if let Some(imprint) = self.imprints.iter_mut().find(|imprint| imprint.id == id) {
             imprint.drag.end(end, now);
         }
+        // A slot it opened while hovering the stack closes again.
+        if let Some(carried) = self.carried.as_mut().filter(|c| c.id == id) {
+            carried.reorder.cancel(now);
+        }
+    }
+
+    /// The card's file is over the stack at window y `y` (DIPs), or left it
+    /// (`None`): the card eases back into view and the cards it would pass
+    /// open the slot under the pointer (`Reorder::hovering`), or it eases
+    /// back into its imprint and the stack closes up again. True when the
+    /// look changes.
+    pub fn hover_drag_out(&mut self, id: &str, y: Option<f32>, now: f64) -> bool {
+        let Some(imprint) = self
+            .imprints
+            .iter_mut()
+            .find(|imprint| imprint.id == id && imprint.drag.ended().is_none())
+        else {
+            return false;
+        };
+        imprint.drag.hover(y.is_some(), now);
+        let count = self.cards.len();
+        let Some(from) = self.cards.iter().position(|c| c.entry.id == id) else {
+            return true;
+        };
+        let to = y.map_or(from, |y| {
+            drag_style::drop_index(count, f64::from(y - self.offset()), self.top)
+        });
+        let settled = !self.collapsed() && self.exits.is_empty() && count == self.stack.ids().len();
+        if self.carried.is_none() && settled && to != from {
+            self.carried = Some(Carried {
+                id: id.to_owned(),
+                reorder: Reorder::hovering(count, from, self.top, now, self.reduced),
+                offsets: vec![0.; count],
+                lift: 0.,
+            });
+        }
+        if let Some(carried) = self.carried.as_mut().filter(|c| c.id == id) {
+            carried.reorder.aim(to);
+        }
+        true
     }
 
     /// The card's file came back onto the stack at window y `y` (DIPs): it
@@ -655,6 +695,12 @@ impl Stack {
             return true;
         };
         let to = drag_style::drop_index(count, f64::from(y - self.offset()), self.top);
+        // Hovering, the stack already opened a slot: land there.
+        if let Some(carried) = self.carried.as_mut().filter(|c| c.id == id) {
+            carried.reorder.aim(to);
+            carried.reorder.drop(now);
+            return true;
+        }
         let settled = !self.collapsed()
             && self.exits.is_empty()
             && self.carried.is_none()
@@ -1243,8 +1289,8 @@ impl Stack {
                     EditorPhase::Present | EditorPhase::Leaving
                 ) && card.presence.phase_elapsed_ms(now) < preview_chrome::EDITOR_PRESENCE_LEAVE_MS
             });
-        let dragging =
-            self.carried.is_some() || self.imprints.iter().any(|imprint| imprint.running(now));
+        let dragging = self.carried.as_ref().is_some_and(|c| c.reorder.moving())
+            || self.imprints.iter().any(|imprint| imprint.running(now));
         pile || arriving
             || dragging
             || presence
@@ -4066,12 +4112,16 @@ pub fn close() {
     }
 }
 
-/// A card's file drag is running: the stack takes it back as a drop.
-fn dragging_a_card() -> bool {
+/// A file drag is over the stack at screen `point` (px), or left it: true
+/// when it is one of the stack's own cards, which the stack takes back as a
+/// drop and shows in the slot under the pointer meanwhile. The OLE loop
+/// calls this while the stack is not borrowed.
+fn drag_over(point: Option<POINT>) -> bool {
     PREVIEWS.with(|p| {
-        p.try_borrow()
-            .ok()
-            .is_some_and(|p| p.as_ref().is_some_and(|p| p.dragging.is_some()))
+        let Ok(mut p) = p.try_borrow_mut() else {
+            return false;
+        };
+        p.as_mut().is_some_and(|p| p.drag_over(point))
     })
 }
 
@@ -4267,7 +4317,7 @@ impl Previews {
         let tokens = crate::appearance::tokens(options.appearance.as_deref(), settings);
         let g = Gfx::shared(&tokens)?;
         let hwnd = unsafe { window()? };
-        crate::drag::register_target(hwnd, dragging_a_card);
+        crate::drag::register_target(hwnd, drag_over);
         let (sender, results) = channel();
         Ok(Self {
             hwnd,
@@ -4607,6 +4657,10 @@ impl Previews {
     /// Let clicks through the window, polling the pointer until it is back
     /// over the stack, or take them again.
     fn set_passthrough(&mut self, on: bool) {
+        // A card's drag keeps the window solid so its file can come back:
+        // the imprint takes no pointer, and a click-through window is no
+        // drop target.
+        let on = on && self.dragging.is_none();
         if self.passthrough == on {
             return;
         }
@@ -4893,6 +4947,9 @@ impl Previews {
         };
         card.error = None;
         self.dragging = Some(id.clone());
+        // The drag finds the stack's drop target only while the window
+        // takes the pointer.
+        self.set_passthrough(false);
         let style = captures_settings::load(&self.options.settings_file)
             .unwrap_or_default()
             .mini_preview_drag_style;
@@ -4908,6 +4965,25 @@ impl Previews {
             ));
             post(hwnd);
         });
+    }
+
+    /// A card's file drag is over the stack at screen `point`, or left it
+    /// (`None`): the card shows again in the slot it would land in.
+    fn drag_over(&mut self, point: Option<POINT>) -> bool {
+        let Some(id) = self.dragging.clone() else {
+            return false;
+        };
+        let y = point.map(|mut p| {
+            unsafe {
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut p);
+            }
+            p.y as f32 / self.scale
+        });
+        if self.stack.hover_drag_out(&id, y, now_ms()) {
+            let _ = self.render();
+            self.animate();
+        }
+        true
     }
 
     /// The file drag ended (`Some(Ok)`), failed (`Some(Err)`) or was let

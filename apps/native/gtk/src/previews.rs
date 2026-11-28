@@ -234,9 +234,25 @@ pub fn build(
             state.relayout();
         }
     });
-    // A card's file dropped back on the stack moves it to the slot there.
+    // A card's file back over the stack shows the card in the slot under
+    // the pointer, and dropped there moves it to that slot.
     let drop = gtk::DropTargetAsync::new(None, gdk::DragAction::COPY);
     drop.connect_accept(|_, drop| drop.drag().is_some());
+    let weak = Rc::downgrade(&state);
+    let over = move |_: &gtk::DropTargetAsync, _: &gdk::Drop, _: f64, y: f64| {
+        if let Some(state) = weak.upgrade() {
+            state.pile.drag_out_hover(Some(y));
+        }
+        gdk::DragAction::COPY
+    };
+    drop.connect_drag_enter(over.clone());
+    drop.connect_drag_motion(over);
+    let weak = Rc::downgrade(&state);
+    drop.connect_drag_leave(move |_, _| {
+        if let Some(state) = weak.upgrade() {
+            state.pile.drag_out_hover(None);
+        }
+    });
     let weak = Rc::downgrade(&state);
     drop.connect_drop(move |_, drop, _, y| {
         if let Some(state) = weak.upgrade() {

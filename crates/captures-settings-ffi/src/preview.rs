@@ -1318,6 +1318,22 @@ pub unsafe extern "C" fn captures_preview_drag_out_end_v1(
     }
 }
 
+/// The file came back over its own stack (`over`) or left it again (see
+/// `DragOut::hover`).
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_drag_out_hover_v1(
+    handle: *mut CapturesPreviewDragOut,
+    over: bool,
+    now_ms: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        handle.0.hover(over, now_ms);
+    }
+}
+
 /// The pose at `now_ms`; returns whether the end has finished playing (the
 /// card is back at rest, or gone with its slot closed). Null output or
 /// handle returns true and writes nothing.
@@ -1403,6 +1419,40 @@ pub extern "C" fn captures_preview_reorder_landing_v1(
         now_ms,
         reduced_motion,
     ))))
+}
+
+/// A card whose file is back over its own stack, opening the slot it is
+/// aimed at (see `Reorder::hovering`); free it like a reorder.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_reorder_hovering_v1(
+    count: usize,
+    from: usize,
+    top_anchor: bool,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> *mut CapturesPreviewReorder {
+    Box::into_raw(Box::new(CapturesPreviewReorder(Reorder::hovering(
+        count,
+        from,
+        top_anchor,
+        now_ms,
+        reduced_motion,
+    ))))
+}
+
+/// Where a hovering card would land now; its home slot once the file left
+/// the stack (see `Reorder::aim`).
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_reorder_aim_v1(
+    handle: *mut CapturesPreviewReorder,
+    to: usize,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        handle.0.aim(to);
+    }
 }
 
 /// # Safety

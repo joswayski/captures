@@ -429,7 +429,10 @@ bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, doubl
  * (chronological, up to capacity), the carried card's lift and from/to, and
  * returns whether it settled after release; then commit from -> to with
  * captures_preview_stack_move_v1. reorder_landing_v1 is a reorder already
- * let go at `to` (a file dropped back on the stack). Calls on one handle must never overlap;
+ * let go at `to` (a file dropped back on the stack). While the file is back
+ * over its stack, drag_out_hover_v1(true) shows the card again (false when
+ * it leaves), and reorder_hovering_v1 opens the slot aim_v1 names (its home
+ * slot once the file left) until release_v1 lands it or cancels. Calls on one handle must never overlap;
  * free each handle exactly once. */
 typedef struct {
     double opacity, scale, media_blur, media_opacity, media_scale, fill_opacity,
@@ -440,6 +443,7 @@ CapturesPreviewDragOut *captures_preview_drag_out_new_v1(uint32_t style, double 
     bool reduced_motion);
 void captures_preview_drag_out_free_v1(CapturesPreviewDragOut *handle);
 void captures_preview_drag_out_end_v1(CapturesPreviewDragOut *handle, bool dropped, double now_ms);
+void captures_preview_drag_out_hover_v1(CapturesPreviewDragOut *handle, bool over, double now_ms);
 bool captures_preview_drag_out_pose_v1(const CapturesPreviewDragOut *handle, double now_ms,
     CapturesPreviewDragPose *output);
 double captures_preview_closing_shift_v1(double slot, bool top_anchor);
@@ -450,6 +454,9 @@ CapturesPreviewReorder *captures_preview_reorder_new_v1(size_t count, size_t fro
     double now_ms, bool reduced_motion);
 CapturesPreviewReorder *captures_preview_reorder_landing_v1(size_t count, size_t from, size_t to,
     bool top_anchor, double now_ms, bool reduced_motion);
+CapturesPreviewReorder *captures_preview_reorder_hovering_v1(size_t count, size_t from,
+    bool top_anchor, double now_ms, bool reduced_motion);
+void captures_preview_reorder_aim_v1(CapturesPreviewReorder *handle, size_t to);
 void captures_preview_reorder_free_v1(CapturesPreviewReorder *handle);
 void captures_preview_reorder_pointer_v1(CapturesPreviewReorder *handle, double dy);
 void captures_preview_reorder_release_v1(CapturesPreviewReorder *handle, bool cancel, double now_ms);

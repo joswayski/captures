@@ -51,6 +51,14 @@ final class MiniPreviewDragOut {
         tick()
     }
 
+    /// The file is back over its own stack (`over`) or left it: the card
+    /// eases back into view, or back into the style.
+    func hover(_ over: Bool) {
+        guard let handle, !ended else { return }
+        captures_preview_drag_out_hover_v1(handle, over, Self.now)
+        tick()
+    }
+
     /// Stop at once (another drag began): settle as the drag ended.
     func finish() {
         guard handle != nil else { return }

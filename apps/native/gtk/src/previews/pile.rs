@@ -943,6 +943,16 @@ impl Pile {
             drag.model.end(end, now);
             drag.model.style()
         };
+        // A slot it opened while hovering the stack closes again.
+        if let Some(carried) = imp
+            .carried
+            .borrow_mut()
+            .as_mut()
+            .filter(|carried| carried.id == id)
+        {
+            carried.model.cancel(now);
+            carried.moving = true;
+        }
         if end == DragEnd::Returned
             && style != DragStyle::Dock
             && let Some(root) = self.card_root(id)
@@ -953,6 +963,64 @@ impl Pile {
         self.update_cards();
         self.animate();
         true
+    }
+
+    /// The card whose file is out is back over the stack at pile `y`, or
+    /// left it (`None`): the card eases back into view and the cards it
+    /// would pass open the slot under the pointer
+    /// (`Reorder::hovering`), or it eases back into its imprint and the
+    /// stack closes up again.
+    pub fn drag_out_hover(&self, y: Option<f64>) {
+        let imp = self.imp();
+        let now = self.drag_now();
+        let Some((id, style)) = imp.drags.borrow_mut().iter_mut().find_map(|drag| {
+            drag.model.ended().is_none().then(|| {
+                drag.model.hover(y.is_some(), now);
+                (drag.id.clone(), drag.model.style())
+            })
+        }) else {
+            return;
+        };
+        if style != DragStyle::Dock
+            && let Some(root) = self.card_root(&id)
+        {
+            let (on, off) = if y.is_some() {
+                ("drag-returning", "drag-imprint")
+            } else {
+                ("drag-imprint", "drag-returning")
+            };
+            root.remove_css_class(off);
+            root.add_css_class(on);
+        }
+        let count = imp.cards.borrow().len();
+        let from = imp.cards.borrow().iter().position(|card| card.id == id);
+        let home_top = imp
+            .origins
+            .borrow()
+            .get(&id)
+            .map(|&(_, top)| f64::from(top));
+        if let (Some(from), Some(home_top)) = (from, home_top) {
+            let top = imp.top_anchor.get();
+            let content = home_top - Reorder::slot_top(count, from, top);
+            let to = y.map_or(from, |y| drag_style::drop_index(count, y - content, top));
+            let settled = !imp.collapsed.get() && imp.exits.borrow().is_empty();
+            let mut carried = imp.carried.borrow_mut();
+            if carried.is_none() && settled && to != from {
+                *carried = Some(Carried {
+                    id: id.clone(),
+                    model: Reorder::hovering(count, from, top, now, self.reduced()),
+                    offsets: vec![0.; count],
+                    lift: 0.,
+                    moving: true,
+                    home_top,
+                });
+            }
+            if let Some(carried) = carried.as_mut().filter(|carried| carried.id == id) {
+                carried.model.aim(to);
+                carried.moving = true;
+            }
+        }
+        self.animate();
     }
 
     /// `id`'s file was dropped back on the stack at pile `y`: the card
@@ -976,6 +1044,22 @@ impl Pile {
         let from = imp.cards.borrow().iter().position(|card| card.id == id);
         let home_top = imp.origins.borrow().get(id).map(|&(_, top)| f64::from(top));
         let top = imp.top_anchor.get();
+        // Hovering, the stack already opened a slot: land there.
+        let hovering = imp.carried.borrow_mut().take_if(|carried| carried.id == id);
+        if let Some(mut carried) = hovering {
+            if let (Some(from), Some(home_top)) = (from, home_top) {
+                let content = home_top - Reorder::slot_top(count, from, top);
+                carried
+                    .model
+                    .aim(drag_style::drop_index(count, y - content, top));
+            }
+            carried.model.drop(now);
+            carried.moving = true;
+            self.drag_out_end(id, DragEnd::Returned);
+            *imp.carried.borrow_mut() = Some(carried);
+            self.animate();
+            return true;
+        }
         let to = from.zip(home_top).and_then(|(from, home_top)| {
             let content = home_top - Reorder::slot_top(count, from, top);
             let to = drag_style::drop_index(count, y - content, top);
