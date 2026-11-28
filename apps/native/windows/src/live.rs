@@ -48,6 +48,9 @@ struct Resident {
     updates: Option<CheckWorker>,
     /// Update now was pressed: install once the package is verified.
     update_install: bool,
+    /// The helper is waiting for this process: quit at this instant, once
+    /// the notice has counted down and faded, as shipping.
+    restart_quit_at: Option<Instant>,
     /// Automatic checks after the first, as shipping's five-minute interval.
     next_update_check: Instant,
     /// Open With files waiting to import, in arrival order.
@@ -235,6 +238,7 @@ pub fn start(options: &Options, instance: Instance) {
             options: options.clone(),
             updates,
             update_install: false,
+            restart_quit_at: None,
             next_update_check: Instant::now() + UPDATE_INTERVAL,
             open_queue: VecDeque::new(),
             opening: None,
@@ -835,6 +839,13 @@ pub fn update_card() -> Option<crate::updates::Card> {
 /// Publish worker progress, run the five-minute check, act on the card's
 /// button and hand a verified package to the update helper.
 fn service_updates() {
+    // The helper has the package: hold the restarting notice, then quit.
+    if let Some(at) = RESIDENT.with(|r| r.borrow().as_ref().and_then(|r| r.restart_quit_at)) {
+        if Instant::now() >= at {
+            unsafe { PostQuitMessage(0) };
+        }
+        return;
+    }
     let step = crate::host::with_host(|h| h.update_step.take())
         .flatten()
         .or_else(crate::update_notice::take_step);
@@ -983,8 +994,27 @@ fn install_update() {
         result
     });
     match result {
-        // Quit drains editors (drafts are kept) before the process exits.
-        Ok(()) => unsafe { PostQuitMessage(0) },
+        // The notice counts "Restarting in 3…" down and fades, then the loop
+        // quits, which drains editors (drafts are kept) before the process
+        // exits and releases the package lock the helper waits for.
+        Ok(()) => {
+            let hold = crate::update_notice::restart_hold();
+            let wake = RESIDENT.with(|r| {
+                let mut r = r.borrow_mut();
+                let r = r.as_mut()?;
+                r.restart_quit_at = Some(Instant::now() + hold);
+                Some(wake_on(r.thread))
+            });
+            match wake {
+                Some(wake) => {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(hold);
+                        wake();
+                    });
+                }
+                None => unsafe { PostQuitMessage(0) },
+            }
+        }
         // The worker now reports Update failed with the reason.
         Err(error) => eprintln!("Could not start the update: {error}"),
     }
@@ -1224,6 +1254,15 @@ fn reactivate(options: &Options) {
 /// screen and the Record rows the bar in Record on their target.
 fn new_capture(options: &Options, action: capture_error::Action, from_menu: bool) {
     use crate::capture::Target as T;
+    // Captures is about to quit for an update restart: start nothing it
+    // would cut short, as shipping refused captures while restarting.
+    if RESIDENT.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.restart_quit_at.is_some())
+    }) {
+        return;
+    }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     if !settings.onboarding_completed {
         return open_setup(options);

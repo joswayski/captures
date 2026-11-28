@@ -390,6 +390,19 @@ fn with_notice<R>(f: impl FnOnce(&mut Notice) -> R) -> Option<R> {
     NOTICE.with(|n| n.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
+/// How long an update restart keeps Captures open: the notice's "Restarting
+/// in 3…" countdown and its `update-restart-exit` fade, as shipping held
+/// them before relaunching.
+pub fn restart_hold() -> std::time::Duration {
+    let reduced = crate::appearance::reduced_motion();
+    let ms = with_notice(|n| Motion::UpdateNoticeRestartExit.resolve(&n.t))
+        .flatten()
+        .map_or(f64::from(RESTART_SECONDS) * 1_000., |exit| {
+            exit.total_ms(reduced)
+        });
+    std::time::Duration::from_secs_f64(ms / 1_000.)
+}
+
 struct Notice {
     hwnd: HWND,
     g: Gfx,
