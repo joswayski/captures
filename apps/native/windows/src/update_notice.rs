@@ -34,7 +34,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_INSERT,
+};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -44,6 +47,7 @@ use crate::gfx::{self, Gfx, Text, rect};
 use crate::notice_motion::{self, Curve};
 use crate::panel_uia::{self, Role};
 use crate::startup_notice::TrayRect;
+use crate::textfield::{self, Editor};
 use crate::tokens::Tokens;
 use crate::updates::Step;
 
@@ -431,6 +435,23 @@ struct Notice {
     held: f64,
     /// The last paint fitted a new height: place the card again.
     refit: bool,
+    /// The copy the last paint drew, for selecting it.
+    copy: Vec<Selectable>,
+    /// Selected copy: its index in `copy` and the selection in its text.
+    selection: Option<(usize, Editor)>,
+    /// A press on copy that may become a drag selecting it.
+    press: Option<Press>,
+    /// The last double-click on copy, for a third click.
+    double_click: Option<(Instant, f32, f32)>,
+}
+
+/// A press on copy: its index, text position and point, and whether it has
+/// moved far enough to select.
+struct Press {
+    index: usize,
+    anchor: usize,
+    from: (f32, f32),
+    dragging: bool,
 }
 
 impl Drop for Notice {
@@ -453,6 +474,7 @@ fn open(live: Live) -> Result<()> {
     unsafe {
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;
         RegisterClassW(&WNDCLASSW {
+            style: CS_DBLCLKS,
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
@@ -511,6 +533,10 @@ fn open(live: Live) -> Result<()> {
                 fit: None,
                 held: 0.,
                 refit: false,
+                copy: Vec::new(),
+                selection: None,
+                press: None,
+                double_click: None,
             })
         });
         if placement.caret == Caret::None && tray_notice::should_retry_tray_rect() {
@@ -831,19 +857,40 @@ impl Notice {
             self.started.elapsed().as_secs_f32()
         };
         let link = self.glow_step(reduced);
-        let ui = Ui {
+        let mut ui = Ui {
             hover: self.hover,
             scroll: self.scroll,
             time: elapsed,
             restart: restart.clamp(0., 1.),
             link,
+            selection: self.selection.as_ref().map(|(index, editor)| {
+                let (a, b) = editor.selection();
+                (*index, a, b)
+            }),
         };
         let mut painted = None;
         gfx::draw_surface(&surface, px, (self.scale, self.scale), 0., |dc| {
             painted = Some(paint(dc, &self.g, &self.t, &self.presentation, &p, &ui)?);
             Ok(())
         })?;
+        // A new presentation can move or change the selected copy: drop the
+        // selection and paint without it.
+        let moved = |painted: &Painted| {
+            self.selection.as_ref().is_some_and(|(index, editor)| {
+                painted.copy.get(*index).map(|c| &c.text.units[..]) != Some(editor.units())
+            })
+        };
+        if painted.as_ref().is_some_and(moved) {
+            self.selection = None;
+            self.press = None;
+            ui.selection = None;
+            gfx::draw_surface(&surface, px, (self.scale, self.scale), 0., |dc| {
+                painted = Some(paint(dc, &self.g, &self.t, &self.presentation, &p, &ui)?);
+                Ok(())
+            })?;
+        }
         if let Some(painted) = painted {
+            self.copy = painted.copy;
             self.parts = painted.parts;
             self.scroll_max = painted.scroll_max;
             self.notes = painted.notes;
@@ -934,6 +981,111 @@ impl Notice {
                 && y >= part.rect.top
                 && y < part.rect.bottom
         })
+    }
+
+    /// The copy under `(x, y)`, off its links: its index and text position.
+    fn copy_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
+        if self.part_at(x, y).is_some() {
+            return None;
+        }
+        self.copy.iter().enumerate().find_map(|(index, copy)| {
+            let clip = copy.clip;
+            let shown = x >= clip.left && x < clip.right && y >= clip.top && y < clip.bottom;
+            let (position, inside) = gfx::hit_text(&copy.text, x - copy.x, y - copy.y);
+            (shown && inside).then_some((index, position))
+        })
+    }
+
+    /// Change the selection in the `index`th copy, dropping any in other copy.
+    fn select(&mut self, index: usize, edit: impl FnOnce(&mut Editor) -> textfield::Change) {
+        let Some(copy) = self.copy.get(index) else {
+            return;
+        };
+        if self.selection.as_ref().is_none_or(|(at, _)| *at != index) {
+            let mut editor = Editor::default();
+            editor.multiline = true;
+            editor.set_text(&String::from_utf16_lossy(&copy.text.units));
+            self.selection = Some((index, editor));
+        }
+        if let Some((_, editor)) = &mut self.selection
+            && edit(editor).any()
+        {
+            self.render_logged();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        if self.selection.take().is_some() {
+            self.render_logged();
+        }
+    }
+
+    /// A press off the links and buttons, as Preferences' page copy: a
+    /// double-click selects a word, a third click the paragraph, and a plain
+    /// press drops the selection and may start a drag. Returns whether the
+    /// notice should take focus, so Ctrl+C reaches it.
+    fn copy_press(&mut self, double: bool, x: f32, y: f32) -> bool {
+        self.press = None;
+        let Some((index, position)) = self.copy_at(x, y) else {
+            self.clear_selection();
+            return false;
+        };
+        let time = std::time::Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }));
+        let third = self.double_click.take().is_some_and(|(at, px, py)| {
+            at.elapsed() < time && (px - x).abs() < 4. && (py - y).abs() < 4.
+        });
+        if double {
+            self.select(index, |editor| {
+                let (start, end) = editor.word_at(position);
+                editor.select(start, end)
+            });
+            self.double_click = Some((Instant::now(), x, y));
+            true
+        } else if third {
+            self.select(index, Editor::select_all);
+            true
+        } else {
+            self.clear_selection();
+            self.press = Some(Press {
+                index,
+                anchor: position,
+                from: (x, y),
+                dragging: false,
+            });
+            false
+        }
+    }
+
+    /// The pointer moved with a press on copy: past 3 DIPs it selects from
+    /// the press to the pointer. Returns true when the drag starts.
+    fn copy_drag(&mut self, x: f32, y: f32) -> bool {
+        let Some(press) = &mut self.press else {
+            return false;
+        };
+        let started =
+            !press.dragging && ((x - press.from.0).abs() > 3. || (y - press.from.1).abs() > 3.);
+        press.dragging |= started;
+        if press.dragging {
+            let (index, anchor) = (press.index, press.anchor);
+            let Some(copy) = self.copy.get(index) else {
+                return false;
+            };
+            let caret = gfx::hit_text(&copy.text, x - copy.x, y - copy.y).0;
+            self.select(index, |editor| editor.select(anchor, caret));
+        }
+        started
+    }
+
+    /// The selected copy for Ctrl+C, without the ↗ that holds the place of
+    /// a link icon.
+    fn selected_text(&self) -> Option<String> {
+        let (_, editor) = self.selection.as_ref()?;
+        let text: String = editor
+            .selected_text()
+            .chars()
+            .filter(|c| *c != '\u{2197}')
+            .collect();
+        (!text.is_empty()).then_some(text)
     }
 }
 
@@ -1060,10 +1212,23 @@ pub struct Ui {
     pub restart: f32,
     /// The version link's hover, eased: 0 at rest, 1 hovered.
     pub link: f32,
+    /// Selected copy: its index in [`Painted::copy`] and UTF-16 range.
+    pub selection: Option<(usize, usize, usize)>,
+}
+
+/// Copy the pointer can select, as drawn: its text, where, and the area it
+/// shows in (the notes scroller clips its list).
+pub struct Selectable {
+    pub text: Text,
+    pub x: f32,
+    pub y: f32,
+    pub clip: D2D_RECT_F,
 }
 
 pub struct Painted {
     pub parts: Vec<Part>,
+    /// The copy drawn, in paint order.
+    pub copy: Vec<Selectable>,
     pub scroll_max: f32,
     /// The notes scroller, for the wheel.
     pub notes: Option<D2D_RECT_F>,
@@ -1476,6 +1641,24 @@ pub fn paint(
     let (top, bottom) = (card.top + 1., card.bottom - 1.);
     let width = right - left;
     let inner = width - 2. * s6;
+    // Copy drawn at `(x, y)` that the pointer can select inside `clip`, with
+    // its part of the selection drawn over it (`::selection`).
+    let mut drawn: Vec<Selectable> = Vec::new();
+    let mut selectable = |text: &Text, (x, y): (f32, f32), clip: D2D_RECT_F| -> Result<()> {
+        if let Some((_, a, b)) = ui.selection.filter(|s| s.0 == drawn.len()) {
+            for r in gfx::range_boxes(text, a, b) {
+                let (fill, ink) = (c("theme-accent"), c("theme-accent-ink"));
+                gfx::selected(dc, text, offset(r, x, y), (x, y), fill, ink)?;
+            }
+        }
+        drawn.push(Selectable {
+            text: text.clone(),
+            x,
+            y,
+            clip,
+        });
+        Ok(())
+    };
 
     // ---- measure ----
     // `.update-notice-header`: 36 px icon and copy.
@@ -1920,6 +2103,7 @@ pub fn paint(
     let copy_x = if update { left + s6 } else { icon.right + s4 };
     let copy_y = mid - copy_height / 2.;
     gfx::text(dc, &title, copy_x, copy_y, c("text"))?;
+    selectable(&title, (copy_x, copy_y), card)?;
     let desc_y = copy_y + title.height + 2.;
     let mut version_link = None;
     if let Some((text_range, range, arrow, _)) = &link {
@@ -1962,6 +2146,7 @@ pub fn paint(
         );
     }
     gfx::text(dc, &description, copy_x, desc_y, c("text-subtle"))?;
+    selectable(&description, (copy_x, desc_y), card)?;
     // `role="dialog"` with `aria-labelledby`/`aria-describedby`.
     part(
         Role::Heading(1),
@@ -2035,6 +2220,7 @@ pub fn paint(
         };
         if let Some(intro) = intro {
             gfx::text(dc, intro, ix, iy, c("text-subtle"))?;
+            selectable(intro, (ix, iy), card)?;
             part(
                 Role::Text,
                 notes.intro.as_deref().unwrap_or_default(),
@@ -2082,6 +2268,7 @@ pub fn paint(
                 }
                 _ => gfx::text(dc, empty, ix, iy, c("text-subtle"))?,
             }
+            selectable(empty, (ix, iy), card)?;
         } else {
             // The scroller: the rest of the section, clipped.
             // An update's list spans the inner width, as its text was laid out.
@@ -2126,6 +2313,7 @@ pub fn paint(
                 }
                 if let Some(h3) = &group.heading {
                     result = result.and(gfx::text(dc, h3, view.left, gy, c("text")));
+                    result = result.and(selectable(h3, (view.left, gy), view));
                     let r = rect(view.left, gy, view.left + h3.width, gy + h3.height);
                     if visible(r) {
                         part(Role::Heading(3), &source.display_version, r, None, true);
@@ -2183,6 +2371,7 @@ pub fn paint(
                     if let (Some(title), Some(copy)) = (&item.title, &note.title) {
                         tagged!(title, gy);
                         result = result.and(gfx::text(dc, title, x, gy, c("text")));
+                        result = result.and(selectable(title, (x, gy), view));
                         let r = rect(x, gy, x + title.width, gy + title.height);
                         if visible(r) {
                             part(Role::Text, copy, r, None, true);
@@ -2235,10 +2424,12 @@ pub fn paint(
                             result = result.and(gfx::text(dc, &item.text, x, gy, c("text-muted")))
                         }
                     }
+                    result = result.and(selectable(&item.text, (x, gy), view));
                     gy += item.text.height;
                 }
                 if let Some(empty) = &group.empty {
                     result = result.and(gfx::text(dc, empty, view.left, gy, c("text-subtle")));
+                    result = result.and(selectable(empty, (view.left, gy), view));
                     gy += empty.height;
                 }
             }
@@ -2309,6 +2500,7 @@ pub fn paint(
                 c("text-faint"),
             )?;
             gfx::text(dc, text, bx0 + 12. + s3, py, c("text-faint"))?;
+            selectable(text, (bx0 + 12. + s3, py), card)?;
             part(
                 Role::Text,
                 copy,
@@ -2361,6 +2553,7 @@ pub fn paint(
         let gap = if update { s4 } else { 0. };
         let (r, iy) = progress_box(py, message.height + gap + bar)?;
         gfx::text(dc, message, ix, iy, c("text-subtle"))?;
+        selectable(message, (ix, iy), card)?;
         // `update-restart-progress`: full, emptying over the countdown.
         let ty = iy + message.height + gap;
         let track = rect(ix, ty, ix + iw, ty + bar);
@@ -2385,6 +2578,7 @@ pub fn paint(
         gfx::fill_round(dc, r, n("r-lg"), c("danger-surface"))?;
         gfx::border(dc, r, n("r-lg"), 1., c("danger-border"))?;
         gfx::text(dc, message, ix, r.top + 1. + s5, c("danger-text"))?;
+        selectable(message, (ix, r.top + 1. + s5), card)?;
         part(Role::Alert, &source.message, r, None, true);
         let fy = r.bottom + s3;
         match range {
@@ -2423,10 +2617,12 @@ pub fn paint(
             }
             None => gfx::text(dc, fallback, bx0, fy, c("text-subtle"))?,
         }
+        selectable(fallback, (bx0, fy), card)?;
         y = fy + fallback.height;
     }
     if let Some((message, text)) = &status {
         gfx::text(dc, text, bx0, y, c("text-subtle"))?;
+        selectable(text, (bx0, y), card)?;
         part(
             Role::Status,
             message,
@@ -2517,6 +2713,7 @@ pub fn paint(
     }
     Ok(Painted {
         parts,
+        copy: drawn,
         scroll_max,
         notes: notes_view,
         link: version_link,
@@ -2553,13 +2750,44 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
                 LRESULT(0)
             }
-            // Never activates: a click works without taking focus.
+            // Never activates on a click, so the app the user is in keeps
+            // focus; only selecting copy (below) activates it, for Ctrl+C.
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-            WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP => {
+            WM_KEYDOWN => {
+                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                let vk = VIRTUAL_KEY(wp.0 as u16);
+                let text = (ctrl && matches!(vk, VK_C | VK_INSERT))
+                    .then(|| with_notice(|n| n.selected_text()).flatten())
+                    .flatten();
+                if let Some(text) = text {
+                    textfield::copy(hwnd, &text);
+                }
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONUP => {
                 let (x, y) = (lp.0 as u16 as i16 as f32, (lp.0 >> 16) as u16 as i16 as f32);
                 let clicked = with_notice(|n| {
                     let (x, y) = (x / n.scale, y / n.scale);
-                    let over = n.part_at(x, y).map(|part| part.key);
+                    match msg {
+                        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+                            let _ = SetCapture(hwnd);
+                            if n.copy_press(msg == WM_LBUTTONDBLCLK, x, y) {
+                                let _ = SetForegroundWindow(hwnd);
+                            }
+                        }
+                        WM_MOUSEMOVE if n.copy_drag(x, y) => {
+                            n.pressed = None;
+                            let _ = SetForegroundWindow(hwnd);
+                        }
+                        WM_LBUTTONUP => {
+                            let _ = ReleaseCapture();
+                            n.press = None;
+                        }
+                        _ => {}
+                    }
+                    // While selecting, no link or button lights up or clicks.
+                    let selecting = n.press.as_ref().is_some_and(|p| p.dragging);
+                    let over = n.part_at(x, y).map(|part| part.key).filter(|_| !selecting);
                     if !n.tracking {
                         let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
                             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
@@ -2574,7 +2802,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                         n.render_logged();
                     }
                     match msg {
-                        WM_LBUTTONDOWN => {
+                        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                             n.pressed = over;
                             None
                         }
@@ -2626,8 +2854,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_SETCURSOR => {
-                let hover = with_notice(|n| n.hover.is_some()).unwrap_or(false);
-                SetCursor(LoadCursorW(None, if hover { IDC_HAND } else { IDC_ARROW }).ok());
+                let mut point = POINT::default();
+                let _ = GetCursorPos(&mut point);
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point);
+                let cursor = with_notice(|n| {
+                    let (x, y) = (point.x as f32 / n.scale, point.y as f32 / n.scale);
+                    let selecting = n.press.as_ref().is_some_and(|p| p.dragging);
+                    if selecting || (n.hover.is_none() && n.copy_at(x, y).is_some()) {
+                        IDC_IBEAM
+                    } else if n.hover.is_some() {
+                        IDC_HAND
+                    } else {
+                        IDC_ARROW
+                    }
+                })
+                .unwrap_or(IDC_ARROW);
+                SetCursor(LoadCursorW(None, cursor).ok());
                 LRESULT(1)
             }
             WM_ERASEBKGND => LRESULT(1),
@@ -2682,6 +2924,7 @@ pub fn render_offscreen(
             time: 0.,
             restart: 1.,
             link: 0.,
+            selection: None,
         };
         // As the live notice: measure an update's card at the estimate
         // (clipped to nothing), then paint it at its fitted height.

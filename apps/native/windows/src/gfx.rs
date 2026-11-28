@@ -392,6 +392,7 @@ fn spec(style: Style) -> Spec {
     }
 }
 
+#[derive(Clone)]
 pub struct Text {
     pub layout: IDWriteTextLayout,
     pub width: f32,
