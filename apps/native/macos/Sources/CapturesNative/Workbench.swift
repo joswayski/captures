@@ -1124,7 +1124,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var terminating = false
     private var terminationPending = false
     private var shutdownUpdateIntent: [String: Any]?
-    private var installUpdateRequested = false { didSet { refreshStatusMenu() } }
+    private var installUpdateRequested = false {
+        didSet { refreshStatusMenu(); options.nativeUpdateChecks?.setInstalling(installUpdateRequested) }
+    }
     private var statusMenuSignature: [String]?
     private var updateHealth: UpdateHealthCoordinator?
     private var onboardingReady = false

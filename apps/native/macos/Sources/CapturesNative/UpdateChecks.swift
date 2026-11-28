@@ -90,6 +90,8 @@ final class UpdateCheckModel {
     private(set) var showChangelog = true
     /// A capture or editor is open, so the notice warns that installing closes it.
     private(set) var openCaptures = false
+    /// The host accepted an install and is quitting to run it.
+    private(set) var installing = false
     private(set) var busy = false
     var didChange: (() -> Void)?
     var requestInstallation: (() -> Bool)?
@@ -135,8 +137,11 @@ final class UpdateCheckModel {
         switch card?["step"] as? String {
         case "check": return check(quietly: true)
         case "download":
-            installAfterDownload = acquire(.downloadVerify)
-            return installAfterDownload
+            // Set first: the download request already belongs to an install.
+            installAfterDownload = true
+            let accepted = acquire(.downloadVerify)
+            if !accepted { installAfterDownload = false }
+            return accepted
         case "install": return acquire(.install)
         default: return false
         }
@@ -177,7 +182,7 @@ final class UpdateCheckModel {
         var accepted = false
         do {
             var request: [String: Any] = ["operation": operation, "show_changelog": showChangelog,
-                                          "open_captures": openCaptures]
+                                          "open_captures": openCaptures, "installing": installRequested]
             if automatic { request["automatic"] = true }
             let reply = try transport.request(request)
             try apply(reply)
@@ -210,10 +215,20 @@ final class UpdateCheckModel {
         refresh()
     }
 
+    /// Update now's verified package shows its finished download, not the
+    /// offer again, until Captures quits to install it (as on Linux).
+    func setInstalling(_ installing: Bool) {
+        guard !closed, installing != self.installing else { return }
+        self.installing = installing
+        refresh()
+    }
+
+    private var installRequested: Bool { installing || installAfterDownload }
+
     private func refresh() {
         do {
             try apply(transport.request(["operation": "poll", "show_changelog": showChangelog,
-                                         "open_captures": openCaptures]))
+                                         "open_captures": openCaptures, "installing": installRequested]))
         } catch { presentation["status"] = error.localizedDescription; presentation["failed"] = true; didChange?() }
     }
 
@@ -233,6 +248,8 @@ final class UpdateCheckModel {
         if installAfterDownload, !busy {
             installAfterDownload = false
             if card?["step"] as? String == "install" { _ = acquire(.install) }
+            // A refused install, failed download or cancel offers the update again.
+            if !installing { refresh() }
         }
     }
 

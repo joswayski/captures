@@ -678,17 +678,20 @@ impl CheckWorker {
     /// download-page link or simulated restart. `open_captures` (a capture or
     /// editor is open) adds the close-captures warning to an update that
     /// restarts Captures, as shipping's `will_close_open_captures`.
+    /// `installing` (Update now was pressed, so a verified package installs
+    /// and restarts) keeps a staged package on its finished download.
     pub fn notice(
         &self,
         show_changelog: bool,
         open_captures: bool,
+        installing: bool,
     ) -> Option<crate::update_notice::Presentation> {
         use crate::update_notice::{self as notice, Action, Button, UpdateStatus, ViewState};
         if self.automatic_check && !matches!(self.status, CheckStatus::Available { .. }) {
             return None;
         }
         if self.preview {
-            return self.preview_notice(show_changelog, open_captures);
+            return self.preview_notice(show_changelog, open_captures, installing);
         }
         let will_close = open_captures && self.install_request_enabled;
         let current_version = self.current_version.clone();
@@ -879,6 +882,7 @@ impl CheckWorker {
         &self,
         show_changelog: bool,
         open_captures: bool,
+        installing: bool,
     ) -> Option<crate::update_notice::Presentation> {
         use crate::update_notice::{self as notice, Action, Button, UpdateStatus, ViewState};
         let installable = self.staging_enabled && self.install_request_enabled;
@@ -915,17 +919,22 @@ impl CheckWorker {
                 current_version: current_version.clone(),
                 current_display_version: current_display_version.clone(),
             },
-            CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
-                available(release)
-            }
             CheckStatus::Downloading {
                 release,
                 downloaded,
                 total,
             } => downloading(release, *downloaded, *total),
-            // Verification is part of downloading, as on Windows.
+            // Verification is part of downloading, as on Windows. A package
+            // verified for Update now stays finished until Captures quits to
+            // install it (as on Linux), instead of offering it again.
             CheckStatus::Verifying { release } | CheckStatus::Cancelling { release } => {
                 downloading(release, release.size, release.size)
+            }
+            CheckStatus::Staged { release, .. } if installing => {
+                downloading(release, release.size, release.size)
+            }
+            CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
+                available(release)
             }
             CheckStatus::Error { message } => UpdateStatus::Error {
                 current_version: current_version.clone(),
@@ -944,11 +953,15 @@ impl CheckWorker {
             show_changelog,
             ..Default::default()
         };
-        if let CheckStatus::Downloading { release, .. }
-        | CheckStatus::Verifying { release }
-        | CheckStatus::Cancelling { release }
-        | CheckStatus::DownloadError { release, .. } = &self.status
-        {
+        let followed = match &self.status {
+            CheckStatus::Downloading { release, .. }
+            | CheckStatus::Verifying { release }
+            | CheckStatus::Cancelling { release }
+            | CheckStatus::DownloadError { release, .. } => Some(release),
+            CheckStatus::Staged { release, .. } if installing => Some(release),
+            _ => None,
+        };
+        if let Some(release) = followed {
             view.follow(Some(&available(release)), &status);
         }
         let mut p = notice::present(Some(&status), &view);
@@ -1315,17 +1328,17 @@ mod tests {
             let server = serve(listener, [replies.clone(), replies].concat());
             let (mut worker, _) = worker(&endpoint, &key, current);
             assert!(worker.check_automatically());
-            assert!(worker.notice(true, false).is_none());
+            assert!(worker.notice(true, false, false).is_none());
             wait_idle(&mut worker);
-            assert_eq!(worker.notice(true, false).is_some(), expect_notice);
+            assert_eq!(worker.notice(true, false, false).is_some(), expect_notice);
             assert_eq!(
                 matches!(worker.status(), CheckStatus::Error { .. }),
                 unavailable
             );
             assert!(worker.check());
-            assert!(worker.notice(true, false).is_some());
+            assert!(worker.notice(true, false, false).is_some());
             wait_idle(&mut worker);
-            assert!(worker.notice(true, false).is_some());
+            assert!(worker.notice(true, false, false).is_some());
             worker.shutdown();
             server.join().unwrap();
         }
@@ -1440,7 +1453,7 @@ mod tests {
             .map(|status| {
                 worker.status = status;
                 worker
-                    .notice(show_changelog, open_captures)
+                    .notice(show_changelog, open_captures, false)
                     .unwrap()
                     .card_height
             })
@@ -1452,7 +1465,7 @@ mod tests {
         };
         // One Update downloads, verifies and installs, and the restart note
         // reads the same whether or not captures are open.
-        let offered = worker.notice(true, false).unwrap();
+        let offered = worker.notice(true, false, false).unwrap();
         assert_eq!(offered.title, "Captures update available");
         assert_eq!(offered.description, "Version 2026.11.13.2 · 104 MB");
         assert_eq!(
@@ -1467,7 +1480,7 @@ mod tests {
         for open_captures in [false, true] {
             assert_eq!(
                 worker
-                    .notice(true, open_captures)
+                    .notice(true, open_captures, false)
                     .unwrap()
                     .footer_note
                     .as_deref(),
@@ -1479,16 +1492,29 @@ mod tests {
             release: release.clone(),
             sha256: String::new(),
         };
-        assert_eq!(worker.notice(true, true).unwrap(), offered);
+        assert_eq!(worker.notice(true, true, false).unwrap(), offered);
         // The list stays on screen while the update downloads.
         worker.status = CheckStatus::Downloading {
             release: release.clone(),
             downloaded: 1,
             total: 2,
         };
-        let downloading = worker.notice(true, false).unwrap();
+        let downloading = worker.notice(true, false, false).unwrap();
         assert_eq!(downloading.notes, offered.notes);
         assert!(downloading.footer.is_none() && downloading.download.is_some());
+        // Update's verified package keeps the finished download on screen
+        // until Captures quits to install it, instead of offering it again.
+        worker.status = CheckStatus::Verifying {
+            release: release.clone(),
+        };
+        let verified = worker.notice(true, false, false).unwrap();
+        worker.status = CheckStatus::Staged {
+            release: release.clone(),
+            sha256: String::new(),
+        };
+        let installing = worker.notice(true, false, true).unwrap();
+        assert_eq!(installing, verified);
+        assert!(installing.footer.is_none());
         worker.status = CheckStatus::Available {
             release: release.clone(),
         };
@@ -1559,7 +1585,7 @@ mod tests {
                 worker.presentation().status,
                 format!("Downloading {downloaded} of {total} bytes")
             );
-            let shown = worker.notice(true, false).unwrap().download.unwrap();
+            let shown = worker.notice(true, false, false).unwrap().download.unwrap();
             assert_eq!(shown.percent, Some(percent));
             assert!(
                 shown
@@ -1624,7 +1650,7 @@ mod tests {
             worker.presentation().acquisition.unwrap().action,
             Action::DownloadVerify
         );
-        let available_height = worker.notice(true, false).unwrap().card_height;
+        let available_height = worker.notice(true, false, false).unwrap().card_height;
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,
@@ -1642,7 +1668,7 @@ mod tests {
             "Retry download"
         );
         // The error keeps the card at least as tall as the update it failed.
-        assert!(worker.notice(true, false).unwrap().card_height >= available_height);
+        assert!(worker.notice(true, false, false).unwrap().card_height >= available_height);
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,
@@ -1657,7 +1683,7 @@ mod tests {
             2,
             "retain verified package, not original download"
         );
-        let notice = worker.notice(true, false).unwrap();
+        let notice = worker.notice(true, false, false).unwrap();
         assert_eq!(notice.card_height, available_height, "no jump when staged");
         assert_eq!(notice.title, "Development package verified");
         assert!(notice.restart.is_none() && notice.footer_note.is_none());
@@ -1675,8 +1701,14 @@ mod tests {
         let install = worker.presentation().acquisition.unwrap();
         assert!(install.enabled);
         assert_eq!(install.action, crate::update_notice::Action::Install);
-        assert!(worker.notice(true, false).unwrap().footer_note.is_none());
-        let notice = worker.notice(true, true).unwrap();
+        assert!(
+            worker
+                .notice(true, false, false)
+                .unwrap()
+                .footer_note
+                .is_none()
+        );
+        let notice = worker.notice(true, true, false).unwrap();
         assert_eq!(notice.footer.unwrap().primary.unwrap(), install);
         assert_eq!(
             notice.footer_note.as_deref(),
@@ -1791,7 +1823,7 @@ mod tests {
             worker.poll();
         }
         assert_eq!(worker.generation(), generation, "a refresh does not reveal");
-        let notice = serde_json::to_string(&worker.notice(true, false).unwrap()).unwrap();
+        let notice = serde_json::to_string(&worker.notice(true, false, false).unwrap()).unwrap();
         assert!(notice.contains("Notes for 2026.10.60"), "{notice}");
 
         // Another release lands before Download: Download takes it, not 10.60.
@@ -1971,7 +2003,7 @@ mod tests {
             assert_eq!(worker.generation(), 2);
             assert_eq!(
                 worker
-                    .notice(true, false)
+                    .notice(true, false, false)
                     .unwrap()
                     .download
                     .unwrap()
@@ -2033,7 +2065,7 @@ mod tests {
         use crate::update_notice::Action;
         let (key, _, _) = signed(&manifest("https://example.invalid/artifact"));
         let (mut worker, _) = worker("http://127.0.0.1:9/native.json", &key, "2026.9.99");
-        assert!(worker.notice(true, false).is_none());
+        assert!(worker.notice(true, false, false).is_none());
         worker.status = CheckStatus::Available {
             release: ReleaseInfo {
                 renderer: Renderer::Wgpu,
@@ -2044,7 +2076,7 @@ mod tests {
                 changelog: Vec::new(),
             },
         };
-        let expanded = worker.notice(true, false).unwrap();
+        let expanded = worker.notice(true, false, false).unwrap();
         assert_eq!(expanded.title, "Native development update");
         assert_eq!(
             expanded.description,
@@ -2070,7 +2102,7 @@ mod tests {
                 && expanded.download.is_none()
                 && expanded.restart.is_none()
         );
-        let collapsed = worker.notice(false, false).unwrap();
+        let collapsed = worker.notice(false, false, false).unwrap();
         assert!(collapsed.notes.is_none());
         for status in [
             CheckStatus::Checking,
@@ -2080,7 +2112,7 @@ mod tests {
             },
         ] {
             worker.status = status;
-            let p = worker.notice(true, false).unwrap();
+            let p = worker.notice(true, false, false).unwrap();
             assert!(p.notes.is_none() && p.download.is_none() && p.restart.is_none());
             assert!(!serde_json::to_string(&p).unwrap().contains("captur.es"));
             if worker.checking() {

@@ -15,9 +15,12 @@ final class UpdateChecksTests: XCTestCase {
         var card: [String: Any]?
         /// Each check's `automatic` flag: quiet checks raise only an available notice.
         var quietChecks: [Bool] = []
+        /// Each notice request's `installing` flag.
+        var installing: [Bool] = []
         func request(_ object: [String: Any]) throws -> [String: Any] {
             let operation = object.string("operation")
             operations.append(operation)
+            if let flag = object["installing"] as? Bool { installing.append(flag) }
             if operation == "check" { quietChecks.append(object["automatic"] as? Bool ?? false) }
             if operation == "install_preview" { installRestart = object["restart"] as? [String: Any] }
             if operation == "poll" && pollError { throw AppBridgeError.invalidResponse }
@@ -97,6 +100,31 @@ final class UpdateChecksTests: XCTestCase {
         model.shutdown {}
         XCTAssertFalse(model.acquire(.downloadVerify))
         XCTAssertFalse(model.acquire(.install))
+    }
+
+    func testUpdateNowKeepsItsVerifiedPackageInstallingUntilTheHostQuits() throws {
+        for accepted in [true, false] {
+            let transport = Transport()
+            transport.card = ["step": "download"]
+            transport.acquisition = ["label": "Download", "enabled": true, "action": ["action": "download_verify"]]
+            let model = try UpdateCheckModel(transport: transport)
+            defer { model.shutdown {} }
+            // The host's installUpdateRequested reports an accepted install.
+            model.requestInstallation = { [unowned model] in
+                if accepted { model.setInstalling(true) }
+                return accepted
+            }
+            XCTAssertTrue(model.performCardStep())
+            XCTAssertEqual(transport.installing.last, true, "the download belongs to Update now")
+            transport.checking = false
+            transport.rawStatus = ["state": "staged"]
+            transport.card = ["step": "install"]
+            transport.acquisition = ["label": "Restart and install", "enabled": true, "action": ["action": "install"]]
+            model.poll()
+            XCTAssertEqual(model.installing, accepted)
+            // A refused install offers the verified update again.
+            XCTAssertEqual(transport.installing.last, accepted)
+        }
     }
 
     func testIdleBusyRetryClosedAndHiddenPresentationNeverStartAutomaticChecks() throws {

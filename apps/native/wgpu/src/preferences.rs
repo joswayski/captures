@@ -802,6 +802,8 @@ impl Preferences {
                     .unwrap_or(true),
                 // The maintenance workbench does not track open captures.
                 false,
+                // Nor does it install.
+                false,
             )?,
         ))
     }

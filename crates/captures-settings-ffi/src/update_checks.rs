@@ -41,6 +41,9 @@ enum Request {
         /// A capture or editor is open: an installing update warns it closes them.
         #[serde(default)]
         open_captures: bool,
+        /// Update now was pressed: a verified package installs and restarts.
+        #[serde(default)]
+        installing: bool,
         #[serde(default)]
         automatic: bool,
     },
@@ -48,21 +51,29 @@ enum Request {
         show_changelog: Option<bool>,
         #[serde(default)]
         open_captures: bool,
+        #[serde(default)]
+        installing: bool,
     },
     DownloadVerify {
         show_changelog: Option<bool>,
         #[serde(default)]
         open_captures: bool,
+        #[serde(default)]
+        installing: bool,
     },
     CancelDownload {
         show_changelog: Option<bool>,
         #[serde(default)]
         open_captures: bool,
+        #[serde(default)]
+        installing: bool,
     },
     InstallPreview {
         show_changelog: Option<bool>,
         #[serde(default)]
         open_captures: bool,
+        #[serde(default)]
+        installing: bool,
         restart: captures_app::updater::RestartIntent,
     },
 }
@@ -231,29 +242,34 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
                 .map_err(|_| "Invalid update-check command.")?;
             let worker = &mut unsafe { &mut *handle }.worker;
             worker.poll();
-            let (show_changelog, open_captures) = match request {
+            let (show_changelog, open_captures, installing) = match request {
                 Request::Check {
                     show_changelog,
                     open_captures,
+                    installing,
                     ..
                 }
                 | Request::Poll {
                     show_changelog,
                     open_captures,
+                    installing,
                 }
                 | Request::DownloadVerify {
                     show_changelog,
                     open_captures,
+                    installing,
                 }
                 | Request::CancelDownload {
                     show_changelog,
                     open_captures,
+                    installing,
                 }
                 | Request::InstallPreview {
                     show_changelog,
                     open_captures,
+                    installing,
                     ..
-                } => (show_changelog.unwrap_or(true), open_captures),
+                } => (show_changelog.unwrap_or(true), open_captures, installing),
             };
             let accepted = match request {
                 Request::Check { automatic, .. } => {
@@ -275,7 +291,7 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
             };
             Ok(json!({"accepted":accepted, "checking":worker.checking(),
                 "status":worker.status(), "presentation":worker.presentation(),
-                "generation":worker.generation(), "notice":worker.notice(show_changelog, open_captures)}))
+                "generation":worker.generation(), "notice":worker.notice(show_changelog, open_captures, installing)}))
         })();
         match result {
             Ok(result) => json!({"ok":true, "result":result}),
