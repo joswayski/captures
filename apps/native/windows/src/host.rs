@@ -1470,7 +1470,7 @@ pub fn open(options: &Options) -> Result<()> {
         let host = Host::new(hwnd, options)?;
         HOST.with(|h| *h.borrow_mut() = Some(host));
         with_host(|h| h.request_login(None));
-        let _ = ShowWindow(hwnd, SW_SHOW);
+        crate::live::show_opened(hwnd);
     }
     Ok(())
 }

@@ -5,8 +5,8 @@
 //! forward to it and exit. Windows open as shipping's
 //! `interactive_launch_action` and `app_reactivation` decide.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
@@ -18,7 +18,9 @@ use captures_app::instance::{Instance, Launch, OpenRequest};
 use captures_app::shortcuts::CaptureShortcuts;
 use captures_app::tray_notice;
 use captures_app::updater::checks::{CheckStatus, CheckWorker};
-use captures_app::updater::{HealthAcknowledgement, RestartCaptureWindow, RestartIntent};
+use captures_app::updater::{
+    HealthAcknowledgement, RestartCaptureWindow, RestartIntent, WindowStacking,
+};
 use captures_history::HistoryEntry;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -606,6 +608,7 @@ fn open_windows() -> RestartIntent {
                     .map(|artifact_id| RestartCaptureWindow::RecordingEditor { artifact_id }),
             )
             .collect(),
+        ..Default::default()
     }
 }
 
@@ -660,7 +663,79 @@ fn recover_renderer(options: &Options) {
     }
 }
 
+thread_local! {
+    /// While an update restart reopens a window that sat behind another
+    /// window, the window it goes back behind.
+    static REOPEN_BEHIND: Cell<Option<HWND>> = const { Cell::new(None) };
+}
+
+/// Show a new Preferences or editor window in front, or, while an update
+/// restart reopens one that sat behind another window, back there without
+/// activating it, so it does not interrupt what the user is doing.
+pub fn show_opened(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HWND_BOTTOM, IsWindow, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        SetWindowPos, ShowWindow,
+    };
+    let Some(above) = REOPEN_BEHIND.get() else {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+        return;
+    };
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    unsafe {
+        // The window it sat behind closed meanwhile: stay out of the way.
+        let placed = IsWindow(Some(above)).as_bool()
+            && SetWindowPos(hwnd, Some(above), 0, 0, 0, 0, flags).is_ok();
+        if !placed {
+            let _ = SetWindowPos(hwnd, Some(HWND_BOTTOM), 0, 0, 0, 0, flags);
+        }
+    }
+}
+
+/// Where each of `ours` sits among the desktop's visible, normal (not
+/// always-on-top) windows: the window directly above it, if any. Captures'
+/// other windows (History, which an update does not reopen) are skipped, so
+/// nothing anchors to a window that will not come back.
+fn stacking(ours: &[HWND]) -> HashMap<isize, WindowStacking> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GW_HWNDNEXT, GWL_EXSTYLE, GetTopWindow, GetWindow, GetWindowLongPtrW,
+        GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOPMOST,
+    };
+    let process = std::process::id();
+    let mut found = HashMap::new();
+    let mut above: Option<HWND> = None;
+    let mut next = unsafe { GetTopWindow(None) }.ok();
+    while let Some(hwnd) = next.filter(|hwnd| !hwnd.is_invalid()) {
+        next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
+        let topmost = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 != 0;
+        if topmost || !unsafe { IsWindowVisible(hwnd) }.as_bool() || crate::capture::cloaked(hwnd) {
+            continue;
+        }
+        if ours.contains(&hwnd) {
+            found.insert(
+                hwnd.0 as isize,
+                WindowStacking {
+                    window: hwnd.0 as u64,
+                    below: above.map(|above| above.0 as u64),
+                },
+            );
+        } else {
+            let mut owner = 0;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
+            if owner == process {
+                continue;
+            }
+        }
+        above = Some(hwnd);
+    }
+    found
+}
+
 /// An update restart: the previews, editors and Preferences that were open.
+/// Preferences and editors reopen where they sat among the user's windows,
+/// topmost first so one that sat behind another of them finds it reopened.
 fn restore(options: &Options, restart: &RestartIntent) {
     let root = options
         .history_root
@@ -672,21 +747,73 @@ fn restore(options: &Options, restart: &RestartIntent) {
             crate::previews::restore(options, entry);
         }
     }
-    for window in &restart.capture_windows {
-        let result = match window {
-            RestartCaptureWindow::ScreenshotEditor { artifact_id, .. } => {
-                crate::editor::open(options, artifact_id)
+    let mut pending: Vec<(Option<&RestartCaptureWindow>, Option<WindowStacking>)> = restart
+        .capture_windows
+        .iter()
+        .map(|window| {
+            let id = match window {
+                RestartCaptureWindow::ScreenshotEditor { artifact_id, .. }
+                | RestartCaptureWindow::RecordingEditor { artifact_id } => artifact_id,
+            };
+            (Some(window), restart.capture_stacking.get(id).copied())
+        })
+        .chain(
+            restart
+                .restore_preferences
+                .then_some((None, restart.preferences_stacking)),
+        )
+        .collect();
+    // The windows already reopened, by their handle before the update.
+    let mut reopened: HashMap<u64, HWND> = HashMap::new();
+    while !pending.is_empty() {
+        // Next, one whose window above is not still waiting to reopen.
+        let waiting = |below: u64| {
+            pending
+                .iter()
+                .any(|(_, stacking)| stacking.is_some_and(|s| s.window == below))
+        };
+        let index = pending
+            .iter()
+            .position(|(_, stacking)| !stacking.and_then(|s| s.below).is_some_and(waiting))
+            .unwrap_or(0);
+        let (window, stacking) = pending.remove(index);
+        let behind = stacking.and_then(|s| s.below).map(|below| {
+            reopened
+                .get(&below)
+                .copied()
+                .unwrap_or(HWND(below as usize as *mut _))
+        });
+        REOPEN_BEHIND.set(behind);
+        let opened = match window {
+            Some(RestartCaptureWindow::ScreenshotEditor { artifact_id, .. }) => {
+                crate::editor::open(options, artifact_id).map(|()| {
+                    crate::editor::handles()
+                        .into_iter()
+                        .find(|(id, _)| id == artifact_id)
+                })
             }
-            RestartCaptureWindow::RecordingEditor { artifact_id } => {
-                crate::recording::open(options, artifact_id)
+            Some(RestartCaptureWindow::RecordingEditor { artifact_id }) => {
+                crate::recording::open(options, artifact_id).map(|()| {
+                    crate::recording::handles()
+                        .into_iter()
+                        .find(|(id, _)| id == artifact_id)
+                })
+            }
+            None => {
+                open_preferences(options);
+                Ok(crate::host::with_host(|h| h.hwnd).map(|hwnd| (String::new(), hwnd)))
             }
         };
-        if let Err(error) = result {
-            eprintln!("Could not reopen a capture after the update: {error}");
+        REOPEN_BEHIND.set(None);
+        match opened {
+            Ok(Some((_, hwnd))) => {
+                if let Some(stacking) = stacking {
+                    reopened.insert(stacking.window, hwnd);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("Could not reopen a capture after the update: {error}"),
         }
-    }
-    if restart.restore_preferences {
-        open_preferences(options);
     }
 }
 
@@ -826,6 +953,23 @@ fn install_update() {
             && !IsIconic(hwnd).as_bool()
             && !crate::capture::cloaked(hwnd)
     });
+    // Each reopens where it sits now among the user's windows, instead of
+    // jumping in front of the document or meeting they moved on to.
+    let preferences = crate::host::with_host(|h| h.hwnd).filter(|_| restart.restore_preferences);
+    let editors: Vec<(String, HWND)> = crate::editor::handles()
+        .into_iter()
+        .chain(crate::recording::handles())
+        .collect();
+    let ours: Vec<HWND> = preferences
+        .into_iter()
+        .chain(editors.iter().map(|(_, hwnd)| *hwnd))
+        .collect();
+    let mut found = stacking(&ours);
+    restart.preferences_stacking = preferences.and_then(|hwnd| found.remove(&(hwnd.0 as isize)));
+    restart.capture_stacking = editors
+        .into_iter()
+        .filter_map(|(id, hwnd)| Some((id, found.remove(&(hwnd.0 as isize))?)))
+        .collect();
     let result = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut().ok_or("Captures is closing")?;

@@ -30,6 +30,12 @@ pub struct RestartIntent {
     pub preview_artifact_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capture_windows: Vec<RestartCaptureWindow>,
+    /// Where Preferences and each editor (by artifact ID) sat among the
+    /// desktop's windows, for hosts that reopen them there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferences_stacking: Option<WindowStacking>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capture_stacking: BTreeMap<String, WindowStacking>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -43,6 +49,20 @@ pub enum RestartCaptureWindow {
     RecordingEditor {
         artifact_id: String,
     },
+}
+
+/// Where a reopened window sat in the desktop's stacking order when the
+/// update began, so it reopens there instead of jumping in front of what
+/// the user is doing. Without it (older intents, hosts that cannot place
+/// windows) a window reopens in front.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WindowStacking {
+    /// This window's platform handle when the update began (an HWND on Windows).
+    pub window: u64,
+    /// The window directly above it: another app's, or another reopened
+    /// window's `window`. `None` when it was in front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below: Option<u64>,
 }
 pub use installation::{LaunchFailure, PackageUse, PendingInstallation, recover_installation};
 pub use shutdown_intent::{ShutdownIntent, ShutdownIntentDestination};

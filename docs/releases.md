@@ -472,7 +472,9 @@ rechecks the manifest first. A notice left open while releases land therefore
 never installs a release that is already superseded. An update restart reopens
 Preferences only if it was on screen when the user chose Restart (macOS: on the
 current Space and not fully covered; Windows: not minimized and not on another
-virtual desktop; GTK: not minimized). The website
+virtual desktop; GTK: not minimized). On Windows, Preferences and editors
+reopen at their place in the window stack without taking focus, so one that sat
+behind another app stays behind it; macOS and GTK still reopen them in front. The website
 caches GitHub's `latest.json` for one minute and serves it unchanged; installed
 apps still fall back to the GitHub download URL if captur.es is unreachable.
 Platform download URLs in `latest.json` are rewritten from GitHub API asset

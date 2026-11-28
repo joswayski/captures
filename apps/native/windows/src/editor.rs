@@ -220,6 +220,20 @@ pub fn ids() -> Vec<String> {
     })
 }
 
+/// Each open screenshot editor's artifact and window, for an update restart.
+pub fn handles() -> Vec<(String, HWND)> {
+    EDITORS.with(|e| {
+        e.try_borrow()
+            .map(|e| {
+                e.iter()
+                    .filter(|editor| !editor.closing)
+                    .map(|editor| (editor.artifact_id.clone(), editor.hwnd))
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 /// Something that takes focus or a click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -6886,7 +6900,7 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
         }
         EDITORS.with(|e| e.borrow_mut().push(editor));
         import::register_drop(hwnd);
-        let _ = ShowWindow(hwnd, SW_SHOW);
+        crate::live::show_opened(hwnd);
     }
     Ok(())
 }

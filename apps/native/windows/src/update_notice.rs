@@ -840,13 +840,16 @@ impl Notice {
             }
         }
         let reduced = crate::appearance::reduced_motion();
-        let restart = if self.presentation.restart.is_some() {
+        let restart = if let Some(shown) = &mut self.presentation.restart {
             let at = *self.restart_at.get_or_insert_with(Instant::now);
-            if reduced {
-                1.
-            } else {
-                1. - at.elapsed().as_secs_f32() / RESTART_SECONDS
+            let left = 1. - at.elapsed().as_secs_f32() / RESTART_SECONDS;
+            // "Restarting in N…" counts down with the bar, and still counts
+            // when motion is reduced and the bar stays full.
+            let seconds = (left.clamp(0., 1.) * RESTART_SECONDS).ceil().max(1.) as u8;
+            if shown.seconds_remaining != seconds {
+                *shown = captures_app::update_notice::Restart::counting(seconds);
             }
+            if reduced { 1. } else { left }
         } else {
             self.restart_at = None;
             1.
@@ -900,7 +903,7 @@ impl Notice {
         }
         let (glow, on, _) = self.glow;
         // The spinner, an indeterminate bar, the restart bar and the version
-        // link's hover fade move.
+        // link's hover fade move; the restart countdown's copy ticks.
         let animating = !reduced
             && (glow != if on { 1. } else { 0. }
                 || self.presentation.icon == Icon::Spinner
@@ -909,7 +912,12 @@ impl Notice {
                     .download
                     .as_ref()
                     .is_some_and(|d| d.percent.is_none())
-                || (self.presentation.restart.is_some() && restart > 0.));
+                || (self.presentation.restart.is_some() && restart > 0.))
+            || self
+                .presentation
+                .restart
+                .as_ref()
+                .is_some_and(|r| r.seconds_remaining > 1);
         if animating != self.animating {
             self.animating = animating;
             unsafe {

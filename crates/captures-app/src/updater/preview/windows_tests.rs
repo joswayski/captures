@@ -107,6 +107,8 @@ SectionEnd
                 artifact_id: "recording".into(),
             },
         ],
+        preferences_stacking: None,
+        capture_stacking: BTreeMap::new(),
         recovery: None,
         patch: None,
     };

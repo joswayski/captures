@@ -68,6 +68,15 @@ pub fn ids() -> Vec<String> {
     })
 }
 
+/// Each open recording editor's artifact and window, for an update restart.
+pub fn handles() -> Vec<(String, HWND)> {
+    WINDOWS.with(|w| {
+        w.try_borrow()
+            .map(|w| w.iter().map(|w| (w.id.clone(), w.hwnd)).collect())
+            .unwrap_or_default()
+    })
+}
+
 pub fn with_recording<R>(hwnd: HWND, f: impl FnOnce(&mut Recording) -> R) -> Option<R> {
     WINDOWS.with(|w| {
         let mut windows = w.try_borrow_mut().ok()?;
@@ -2148,7 +2157,7 @@ pub fn open(options: &Options, id: &str) -> Result<()> {
         WINDOWS.with(|windows| windows.borrow_mut().push(editor));
         let (w, h) = crate::host::window_size(hwnd, w, h);
         crate::host::center(hwnd, w, h);
-        let _ = ShowWindow(hwnd, SW_SHOW);
+        crate::live::show_opened(hwnd);
     }
     Ok(())
 }

@@ -93,6 +93,8 @@ impl ShutdownIntentDestination {
             preferences_visible: restart.restore_preferences,
             preview_artifact_ids: restart.preview_artifact_ids,
             capture_windows: restart.capture_windows,
+            preferences_stacking: restart.preferences_stacking,
+            capture_stacking: restart.capture_stacking,
             install_session,
         };
         let bytes = serde_json::to_vec(&record).map_err(std::io::Error::other)?;
@@ -122,6 +124,10 @@ pub struct ShutdownIntent {
     preview_artifact_ids: Vec<String>,
     #[serde(default)]
     capture_windows: Vec<super::RestartCaptureWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preferences_stacking: Option<super::WindowStacking>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    capture_stacking: std::collections::BTreeMap<String, super::WindowStacking>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     install_session: Option<uuid::Uuid>,
 }
@@ -197,6 +203,8 @@ impl ShutdownIntent {
             restore_preferences: record.preferences_visible,
             preview_artifact_ids: record.preview_artifact_ids,
             capture_windows: record.capture_windows,
+            preferences_stacking: record.preferences_stacking,
+            capture_stacking: record.capture_stacking,
         })
     }
 
@@ -319,6 +327,18 @@ mod tests {
                         artifact_id: "recording".into(),
                     },
                 ],
+                preferences_stacking: Some(super::super::WindowStacking {
+                    window: 0x30,
+                    below: Some(0x10),
+                }),
+                capture_stacking: [(
+                    "recording".to_owned(),
+                    super::super::WindowStacking {
+                        window: 0x20,
+                        below: Some(0x30),
+                    },
+                )]
+                .into(),
             };
             assert!(destination.write(&status, restart.clone(), None).unwrap());
             let original = fs::read(&output).unwrap();
@@ -372,7 +392,13 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .remove("preview_artifact_ids");
-            legacy.as_object_mut().unwrap().remove("capture_windows");
+            for field in [
+                "capture_windows",
+                "preferences_stacking",
+                "capture_stacking",
+            ] {
+                legacy.as_object_mut().unwrap().remove(field);
+            }
             fs::write(&output, serde_json::to_vec(&legacy).unwrap()).unwrap();
             assert_eq!(
                 ShutdownIntent::take_matching(&output, &profile, &update).unwrap(),

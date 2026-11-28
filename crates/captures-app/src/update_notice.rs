@@ -760,6 +760,16 @@ pub struct Restart {
     pub seconds_remaining: u8,
 }
 
+impl Restart {
+    /// "Restarting in N…", for a host that counts the seconds down itself.
+    pub fn counting(seconds_remaining: u8) -> Self {
+        Self {
+            message: format!("Restarting in {seconds_remaining}…"),
+            seconds_remaining,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ErrorBlock {
     pub message: String,
@@ -1125,10 +1135,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
     let restart = match status {
         Some(S::Restarting {
             seconds_remaining, ..
-        }) => Some(Restart {
-            message: format!("Restarting in {seconds_remaining}…"),
-            seconds_remaining: *seconds_remaining,
-        }),
+        }) => Some(Restart::counting(*seconds_remaining)),
         _ => None,
     };
     let downloading = download.is_some();

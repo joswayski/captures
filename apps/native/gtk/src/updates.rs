@@ -1200,6 +1200,9 @@ fn install() -> bool {
                 }
             }))
             .collect(),
+        // GTK cannot place a window among other apps' windows (Wayland
+        // forbids it), so it reopens editors where the compositor puts them.
+        ..Default::default()
     };
     let result = RESIDENT.with(|resident| {
         let mut resident = resident.borrow_mut();

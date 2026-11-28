@@ -3878,6 +3878,7 @@ impl Live {
                         }),
                 )
                 .collect(),
+            ..Default::default()
         }
     }
 
@@ -14277,6 +14278,7 @@ mod tests {
                 artifact_id: owner.entry.id.clone(),
                 source_artifact_id: Some(saved.entry.id.clone()),
             }],
+            ..Default::default()
         };
         live.validate_update_restart(&restart).unwrap();
         let mut with_missing = restart.clone();

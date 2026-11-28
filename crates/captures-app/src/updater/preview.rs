@@ -181,6 +181,10 @@ struct InstallRequest {
     preview_artifact_ids: Vec<String>,
     #[serde(default)]
     capture_windows: Vec<super::RestartCaptureWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preferences_stacking: Option<super::WindowStacking>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    capture_stacking: BTreeMap<String, super::WindowStacking>,
     #[serde(default)]
     recovery: Option<recovery::InstallationCheck>,
     /// The installed version a verified `patch` in the request folder starts
@@ -486,6 +490,8 @@ impl Pending {
                 preferences_visible: false,
                 preview_artifact_ids: Vec::new(),
                 capture_windows: Vec::new(),
+                preferences_stacking: None,
+                capture_stacking: BTreeMap::new(),
                 recovery: None,
                 patch,
             },
@@ -584,6 +590,8 @@ impl Download {
         self.request.preferences_visible = restart.restore_preferences;
         self.request.preview_artifact_ids = restart.preview_artifact_ids;
         self.request.capture_windows = restart.capture_windows;
+        self.request.preferences_stacking = restart.preferences_stacking;
+        self.request.capture_stacking = restart.capture_stacking;
         let bytes = serde_json::to_vec(&self.request).map_err(|_| Error::Manifest)?;
         if bytes.len() > 256 * 1024 {
             return Err(Error::MetadataTooLarge);
@@ -1136,6 +1144,8 @@ fn launch_and_confirm(
             restore_preferences: request.preferences_visible,
             preview_artifact_ids: request.preview_artifact_ids.clone(),
             capture_windows: request.capture_windows.clone(),
+            preferences_stacking: request.preferences_stacking,
+            capture_stacking: request.capture_stacking.clone(),
         },
     )?;
     let windows = installer;

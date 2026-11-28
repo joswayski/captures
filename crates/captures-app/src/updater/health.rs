@@ -153,6 +153,18 @@ mod tests {
                     artifact_id: "recording".into(),
                 },
             ],
+            preferences_stacking: Some(super::super::WindowStacking {
+                window: 0x30,
+                below: Some(0x10),
+            }),
+            capture_stacking: [(
+                "recording".to_owned(),
+                super::super::WindowStacking {
+                    window: 0x20,
+                    below: Some(0x30),
+                },
+            )]
+            .into(),
         };
         write_restart_intent(&ready, &intent).unwrap();
         assert_eq!(take_restart_intent(&ready).unwrap(), Some(intent));
