@@ -275,6 +275,69 @@ fn set_image(data: &IDataObject, icon: &Icon) {
     }
 }
 
+/// Make `hwnd` (the mini preview stack) take a file drag while `accepts`
+/// says it is the stack's own, so a card dragged back onto its stack shows
+/// the copy cursor instead of "no drop". Where it lands is decided when the
+/// drag ends ([`landing`] at [`Outcome::point`]).
+pub fn register_target(hwnd: HWND, accepts: fn() -> bool) {
+    let target: IDropTarget = OwnDrops(accepts).into();
+    if let Err(error) = ensure_ole().and_then(|()| unsafe { RegisterDragDrop(hwnd, &target) }) {
+        eprintln!("mini preview drop target: {error}");
+    }
+}
+
+pub fn revoke_target(hwnd: HWND) {
+    unsafe {
+        let _ = RevokeDragDrop(hwnd);
+    }
+}
+
+#[implement(IDropTarget)]
+struct OwnDrops(fn() -> bool);
+
+impl OwnDrops_Impl {
+    fn answer(&self, effect: *mut DROPEFFECT) -> Result<()> {
+        unsafe {
+            *effect = if (self.0)() {
+                DROPEFFECT((*effect).0 & DROPEFFECT_COPY.0)
+            } else {
+                DROPEFFECT_NONE
+            };
+        }
+        Ok(())
+    }
+}
+
+impl IDropTarget_Impl for OwnDrops_Impl {
+    fn DragEnter(
+        &self,
+        _: Ref<IDataObject>,
+        _: MODIFIERKEYS_FLAGS,
+        _: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> Result<()> {
+        self.answer(effect)
+    }
+
+    fn DragOver(&self, _: MODIFIERKEYS_FLAGS, _: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
+        self.answer(effect)
+    }
+
+    fn DragLeave(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        _: Ref<IDataObject>,
+        _: MODIFIERKEYS_FLAGS,
+        _: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> Result<()> {
+        self.answer(effect)
+    }
+}
+
 #[implement(IDropSource)]
 struct DropSource;
 

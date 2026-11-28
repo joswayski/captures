@@ -341,13 +341,15 @@ half opacity, blurred through one cached Direct2D Gaussian per drag, behind
 a 1 DIP hairline, the card at 0.97 with no chrome) or Quiet well (a recessed veil tile with the
 "out" glyph). An accepted drop outside Captures fades the imprint, then its
 slot closes (older cards move up in a top stack, down in a bottom one) and
-only then does the card leave and the window shrink, with nothing jumping; a
-drop back on the stack lands the card in the slot under the pointer, like
+only then does the card leave and the window shrink, with nothing jumping; the
+stack is an OLE drop target for its own card's drag (copy cursor, not "no
+drop"), and a drop back on it lands the card in the slot under the pointer, like
 a reorder (a closed dock gap reopens there), and, like any other end (a drop on another Captures window,
 a failed export, which shows on the card, or a drag let go before it began),
 brings the card back as its style reverses. A mostly vertical press on a
 card of a stack of two or more carries it instead (`preview_drag_style::Reorder`):
-it lifts to 1.03 over a deeper shadow and follows the pointer, the cards it
+it lifts to 1.03 over a deeper shadow and follows the pointer on the 16 ms
+frame timer (mouse moves never restart that timer), the cards it
 passes glide aside, and on release it glides into its slot and the stack's
 order changes; leaving the column hands the gesture to the file drag.
 `--tool previews --select pile|pile-hover|pile-top|overflow|file-drag|file-drag-dock|file-drag-well|drag-close-top|reorder`

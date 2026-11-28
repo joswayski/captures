@@ -3993,6 +3993,8 @@ struct Previews {
     sender: Sender<Done>,
     results: Receiver<Done>,
     tracking: bool,
+    /// `MOTION_TIMER` is running.
+    ticking: Cell<bool>,
     /// `WS_EX_TRANSPARENT` is set: clicks pass through and `POLL_TIMER` runs.
     passthrough: bool,
     /// The display the stack sits on, chosen when a card arrives.
@@ -4058,9 +4060,19 @@ pub fn close() {
     if let Some(previews) = previews {
         unsafe {
             let _ = UiaReturnRawElementProvider(previews.hwnd, WPARAM(0), LPARAM(0), None);
+            crate::drag::revoke_target(previews.hwnd);
             let _ = DestroyWindow(previews.hwnd);
         }
     }
+}
+
+/// A card's file drag is running: the stack takes it back as a drop.
+fn dragging_a_card() -> bool {
+    PREVIEWS.with(|p| {
+        p.try_borrow()
+            .ok()
+            .is_some_and(|p| p.as_ref().is_some_and(|p| p.dragging.is_some()))
+    })
 }
 
 /// Close the stack's window once its last card has gone and nothing moves,
@@ -4255,6 +4267,7 @@ impl Previews {
         let tokens = crate::appearance::tokens(options.appearance.as_deref(), settings);
         let g = Gfx::shared(&tokens)?;
         let hwnd = unsafe { window()? };
+        crate::drag::register_target(hwnd, dragging_a_card);
         let (sender, results) = channel();
         Ok(Self {
             hwnd,
@@ -4282,6 +4295,7 @@ impl Previews {
             sender,
             results,
             tracking: false,
+            ticking: Cell::new(false),
             passthrough: false,
             monitor: Default::default(),
             suppressed: false,
@@ -4666,9 +4680,11 @@ impl Previews {
                 .tips_animating(&self.tokens, crate::tooltip::now_ms())
     }
 
-    /// Tick the frame timer while the fly or fan runs.
+    /// Tick the frame timer while the fly or fan runs. A running timer is
+    /// left alone: setting it again restarts its 16 ms, so calls on every
+    /// mouse move (a carry, a reorder) kept it from ever firing.
     fn animate(&self) {
-        if self.moving() {
+        if self.moving() && !self.ticking.replace(true) {
             unsafe {
                 SetTimer(Some(self.hwnd), MOTION_TIMER, 16, None);
             }
@@ -4793,6 +4809,7 @@ impl Previews {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), MOTION_TIMER);
         }
+        self.ticking.set(false);
         // A landed pile shrinks its frame to the pile.
         if self.stack.collapsed() {
             let _ = self.relayout();
@@ -4984,8 +5001,9 @@ impl Previews {
                         self.stack.reorder_cancel(now_ms());
                         self.begin_drag(id);
                     } else {
+                        // The carry moves on the frame timer (`reorder_frame`);
+                        // a paint per mouse move would only repeat the last one.
                         self.stack.reorder_pointer(since(press, self.scale).1);
-                        let _ = self.render();
                         self.animate();
                     }
                     return Some(LRESULT(0));
