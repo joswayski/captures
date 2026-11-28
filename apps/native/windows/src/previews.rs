@@ -50,7 +50,10 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use captures_app::motion::{Animation, Motion, Pose, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
@@ -88,8 +91,6 @@ use captures_app::tray_notice::LogicalRect;
 
 /// Not exported by the `windows` crate's `WindowsAndMessaging`.
 const WM_MOUSELEAVE: u32 = 0x02A3;
-/// Drives the pile's fly and fan, and card arrivals and exits, while they run.
-const MOTION_TIMER: usize = 7;
 /// Polls the pointer while empty areas let clicks through.
 const POLL_TIMER: usize = 8;
 /// Checks which captures open editors show, for the "In editor" pills, and
@@ -100,6 +101,8 @@ const PRESENCE_INTERVAL_MS: u32 = 250;
 const WM_APP_PREVIEW_DONE: u32 = WM_APP + 31;
 /// A card's file is ready: run the drag loop outside the borrow.
 const WM_APP_PREVIEW_DRAG: u32 = WM_APP + 32;
+/// [`FrameClock`]: the display refreshed; advance the stack's motion.
+const WM_APP_PREVIEW_FRAME: u32 = WM_APP + 33;
 
 type Rect = D2D_RECT_F;
 
@@ -662,17 +665,35 @@ impl Stack {
         });
         let settled = !self.collapsed() && self.exits.is_empty() && count == self.stack.ids().len();
         if self.carried.is_none() && settled && to != from {
-            self.carried = Some(Carried {
-                id: id.to_owned(),
-                reorder: Reorder::hovering(count, from, self.top, now, self.reduced),
-                offsets: vec![0.; count],
-                lift: 0.,
-            });
+            let reorder = Reorder::hovering(count, from, self.top, now, self.reduced);
+            self.carry(id, reorder, now);
         }
         if let Some(carried) = self.carried.as_mut().filter(|c| c.id == id) {
             carried.reorder.aim(to);
         }
         true
+    }
+
+    /// Carry `id`'s card with `reorder` from now on. A card whose file is
+    /// out hands its closing slot to the reorder ([`Reorder::set_slot`]),
+    /// which starts every card where the slot holds it now, so the slot
+    /// reopening and the cards making room never add up to a jump.
+    fn carry(&mut self, id: &str, reorder: Reorder, now: f64) {
+        self.carried = Some(Carried {
+            id: id.to_owned(),
+            reorder,
+            offsets: vec![],
+            lift: 0.,
+        });
+        self.reorder_frame(now);
+    }
+
+    /// How much of its slot `id`'s card takes while its file drag plays.
+    fn slot_open(&self, id: &str, now: f64) -> f64 {
+        self.imprints
+            .iter()
+            .find(|imprint| imprint.id == id)
+            .map_or(1., |imprint| imprint.drag.pose(now).slot)
     }
 
     /// The card's file came back onto the stack at window y `y` (DIPs): it
@@ -711,12 +732,8 @@ impl Stack {
         if closed {
             self.commit_move(id, from, to);
         } else {
-            self.carried = Some(Carried {
-                id: id.to_owned(),
-                reorder: Reorder::landing(count, from, to, self.top, now, self.reduced),
-                offsets: vec![0.; count],
-                lift: 0.,
-            });
+            let reorder = Reorder::landing(count, from, to, self.top, now, self.reduced);
+            self.carry(id, reorder, now);
         }
         true
     }
@@ -754,9 +771,12 @@ impl Stack {
 
     /// The display-index offset of a card older than closing slots: each
     /// slot a dragged card is giving up pulls it toward the anchored edge.
+    /// A carried card's slot moves with its reorder instead.
     fn closing_shift(&self, index: usize, now: f64) -> f64 {
+        let carried = self.carried.as_ref().map(|c| c.id.as_str());
         self.imprints
             .iter()
+            .filter(|imprint| Some(imprint.id.as_str()) != carried)
             .filter_map(|imprint| {
                 let dragged = self.cards.iter().position(|c| c.entry.id == imprint.id)?;
                 (index < dragged)
@@ -784,13 +804,9 @@ impl Stack {
         let Some(card) = self.cards.get(index) else {
             return;
         };
-        let reorder = Reorder::new(self.cards.len(), index, self.top, now, self.reduced);
-        self.carried = Some(Carried {
-            id: card.entry.id.clone(),
-            reorder,
-            offsets: vec![0.; self.cards.len()],
-            lift: 0.,
-        });
+        let (id, count) = (card.entry.id.clone(), self.cards.len());
+        let reorder = Reorder::new(count, index, self.top, now, self.reduced);
+        self.carry(&id, reorder, now);
         self.hovered = None;
         self.hot = None;
         self.pressed = None;
@@ -837,9 +853,14 @@ impl Stack {
     /// Advance the carry one frame; true when it landed and the stack's
     /// order changed (or stayed) for good.
     fn reorder_frame(&mut self, now: f64) -> bool {
+        let Some(id) = self.carried.as_ref().map(|c| c.id.clone()) else {
+            return false;
+        };
+        let open = self.slot_open(&id, now);
         let Some(carried) = self.carried.as_mut() else {
             return false;
         };
+        carried.reorder.set_slot(open);
         let (offsets, lift) = carried.reorder.frame(now);
         carried.offsets = offsets;
         carried.lift = lift;
@@ -4039,8 +4060,9 @@ struct Previews {
     sender: Sender<Done>,
     results: Receiver<Done>,
     tracking: bool,
-    /// `MOTION_TIMER` is running.
-    ticking: Cell<bool>,
+    /// Ticks [`Self::motion_tick`] once per display refresh while the stack
+    /// moves.
+    clock: FrameClock,
     /// `WS_EX_TRANSPARENT` is set: clicks pass through and `POLL_TIMER` runs.
     passthrough: bool,
     /// The display the stack sits on, chosen when a card arrives.
@@ -4345,7 +4367,7 @@ impl Previews {
             sender,
             results,
             tracking: false,
-            ticking: Cell::new(false),
+            clock: FrameClock::new(hwnd),
             passthrough: false,
             monitor: Default::default(),
             suppressed: false,
@@ -4745,14 +4767,12 @@ impl Previews {
                 .tips_animating(&self.tokens, crate::tooltip::now_ms())
     }
 
-    /// Tick the frame timer while the fly or fan runs. A running timer is
-    /// left alone: setting it again restarts its 16 ms, so calls on every
-    /// mouse move (a carry, a reorder) kept it from ever firing.
+    /// Tick the frame clock while anything moves. Calls on every mouse move
+    /// (a carry, a reorder, a file over the stack) only keep it running;
+    /// frames come at the display's pace, not the pointer's.
     fn animate(&self) {
-        if self.moving() && !self.ticking.replace(true) {
-            unsafe {
-                SetTimer(Some(self.hwnd), MOTION_TIMER, 16, None);
-            }
+        if self.moving() {
+            self.clock.start(self.monitor);
         }
     }
 
@@ -4871,10 +4891,7 @@ impl Previews {
         if self.moving() {
             return;
         }
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), MOTION_TIMER);
-        }
-        self.ticking.set(false);
+        self.clock.stop();
         // A landed pile shrinks its frame to the pile.
         if self.stack.collapsed() {
             let _ = self.relayout();
@@ -4990,8 +5007,10 @@ impl Previews {
             }
             p.y as f32 / self.scale
         });
+        // The frame clock draws the change at the display's next refresh;
+        // OLE calls this on every pointer move and every few milliseconds
+        // while it holds still.
         if self.stack.hover_drag_out(&id, y, now_ms()) {
-            let _ = self.render();
             self.animate();
         }
         true
@@ -5276,13 +5295,141 @@ impl Previews {
                 self.animate();
             }
             WM_APP_PREVIEW_DONE => self.finish(),
-            WM_TIMER if _wp.0 == MOTION_TIMER => self.motion_tick(),
+            WM_APP_PREVIEW_FRAME => self.motion_tick(),
             WM_TIMER if _wp.0 == POLL_TIMER => self.poll(),
             WM_TIMER if _wp.0 == PRESENCE_TIMER => self.sync_presence(),
             _ => return None,
         }
         Some(LRESULT(0))
     }
+}
+
+/// A [`WM_APP_PREVIEW_FRAME`] waits in the queue: refreshes that pass
+/// before it runs post no more, so a busy frame never queues a backlog.
+static FRAME_POSTED: AtomicBool = AtomicBool::new(false);
+
+/// Paces the stack's motion to its display. A 16 ms `SetTimer` rounds up to
+/// the 15.6 ms system tick, so it fired every ~31 ms (32 fps) and never in
+/// step with the screen; `WM_TIMER` also waits behind every mouse message.
+/// While started, a thread waits for each vertical blank of the stack's
+/// monitor (`IDXGIOutput::WaitForVBlank`, ~16 ms where that is missing, as
+/// under Wine) and posts one [`WM_APP_PREVIEW_FRAME`], which the OLE drag
+/// loop dispatches like any window message.
+struct FrameClock {
+    shared: Arc<(Mutex<Clock>, Condvar)>,
+}
+
+#[derive(Default)]
+struct Clock {
+    running: bool,
+    quit: bool,
+    /// The `HMONITOR` whose refresh paces the frames.
+    monitor: isize,
+}
+
+/// Never post faster than this (~166 Hz), even if a vblank wait returns early.
+const FRAME_MIN_GAP: Duration = Duration::from_millis(6);
+/// The pace without a vblank to wait for.
+const FRAME_FALLBACK: Duration = Duration::from_micros(16_667);
+
+impl FrameClock {
+    fn new(hwnd: HWND) -> Self {
+        let shared = Arc::new((Mutex::new(Clock::default()), Condvar::new()));
+        let (thread, hwnd) = (shared.clone(), hwnd.0 as isize);
+        let spawned = std::thread::Builder::new()
+            .name("previews-frame-clock".into())
+            .spawn(move || Self::run(&thread, hwnd));
+        if let Err(error) = spawned {
+            eprintln!("mini preview frame clock: {error}");
+        }
+        Self { shared }
+    }
+
+    fn start(&self, monitor: windows::Win32::Graphics::Gdi::HMONITOR) {
+        let (state, wake) = &*self.shared;
+        let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+        state.monitor = monitor.0 as isize;
+        if !state.running {
+            state.running = true;
+            wake.notify_one();
+        }
+    }
+
+    fn stop(&self) {
+        let (state, _) = &*self.shared;
+        state.lock().unwrap_or_else(|e| e.into_inner()).running = false;
+    }
+
+    fn run(shared: &(Mutex<Clock>, Condvar), hwnd: isize) {
+        let (state, wake) = shared;
+        let mut output: Option<(isize, Option<windows::Win32::Graphics::Dxgi::IDXGIOutput>)> = None;
+        let mut last = Instant::now();
+        loop {
+            let monitor = {
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                while !state.running && !state.quit {
+                    state = wake.wait(state).unwrap_or_else(|e| e.into_inner());
+                }
+                if state.quit {
+                    return;
+                }
+                state.monitor
+            };
+            if output.as_ref().is_none_or(|(m, _)| *m != monitor) {
+                output = Some((monitor, vblank_output(monitor)));
+            }
+            let waited = output
+                .as_ref()
+                .and_then(|(_, output)| output.as_ref())
+                .is_some_and(|output| unsafe { output.WaitForVBlank() }.is_ok());
+            let pace = if waited {
+                FRAME_MIN_GAP
+            } else {
+                FRAME_FALLBACK
+            };
+            if let Some(rest) = pace.checked_sub(last.elapsed()) {
+                std::thread::sleep(rest);
+            }
+            last = Instant::now();
+            if !FRAME_POSTED.swap(true, Ordering::AcqRel) {
+                let posted = unsafe {
+                    PostMessageW(
+                        Some(HWND(hwnd as *mut _)),
+                        WM_APP_PREVIEW_FRAME,
+                        WPARAM(0),
+                        LPARAM(0),
+                    )
+                };
+                if posted.is_err() {
+                    FRAME_POSTED.store(false, Ordering::Release);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for FrameClock {
+    fn drop(&mut self) {
+        let (state, wake) = &*self.shared;
+        state.lock().unwrap_or_else(|e| e.into_inner()).quit = true;
+        wake.notify_one();
+    }
+}
+
+/// The DXGI output showing `monitor`, or the first one.
+fn vblank_output(monitor: isize) -> Option<windows::Win32::Graphics::Dxgi::IDXGIOutput> {
+    use windows::Win32::Graphics::Dxgi::*;
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.ok()?;
+    let mut first = None;
+    for adapter in (0..).map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok()) {
+        for output in (0..).map_while(|i| unsafe { adapter.EnumOutputs(i) }.ok()) {
+            if unsafe { output.GetDesc() }.is_ok_and(|desc| desc.Monitor.0 as isize == monitor) {
+                return Some(output);
+            }
+            first.get_or_insert(output);
+        }
+    }
+    first
 }
 
 fn post(hwnd: isize) {
@@ -5306,6 +5453,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 &panel_uia::node(panel_uia::Window::Previews, None),
             )
         };
+    }
+    if msg == WM_APP_PREVIEW_FRAME {
+        // The next refresh may post again, even if this one finds the stack
+        // borrowed.
+        FRAME_POSTED.store(false, Ordering::Release);
     }
     let before = panel_uia::watch(panel_uia::Window::Previews);
     // The OLE drag loop dispatches this window's messages, so it runs

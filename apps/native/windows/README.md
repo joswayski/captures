@@ -345,18 +345,25 @@ slot closes (older cards move up in a top stack, down in a bottom one) and
 only then does the card leave and the window shrink, with nothing jumping; the
 stack is an OLE drop target for its own card's drag (copy cursor, not "no
 drop"), and the window keeps taking the pointer during that drag (a
-click-through window is no drop target). While the drag is back over the
+click-through window is no drop target); the shell's `IDropTargetHelper`
+keeps drawing the drag image over it. While the drag is back over the
 stack the card eases back into view and the cards it would pass open the
-slot under the pointer (`Reorder::hovering`); leaving again returns it to its
+slot under the pointer (`Reorder::hovering`), taking over its closing slot
+(`Reorder::set_slot`) so a reopening dock gap and the cards making room
+never add up to a jump; leaving again returns it to its
 style and closes the stack up. A drop back on the stack lands the card in that
 slot, like a reorder (a closed dock gap reopens there), and, like any other end (a drop on another Captures window,
 a failed export, which shows on the card, or a drag let go before it began),
 brings the card back as its style reverses. A mostly vertical press on a
 card of a stack of two or more carries it instead (`preview_drag_style::Reorder`):
-it lifts to 1.03 over a deeper shadow and follows the pointer on the 16 ms
-frame timer (mouse moves never restart that timer), the cards it
+it lifts to 1.03 over a deeper shadow and follows the pointer, the cards it
 passes glide aside, and on release it glides into its slot and the stack's
 order changes; leaving the column hands the gesture to the file drag.
+The stack's motion advances once per display refresh: while anything moves,
+a thread waits on its monitor's vertical blank (`IDXGIOutput::WaitForVBlank`)
+and posts one frame, which the OLE drag loop dispatches too. A 16 ms
+`SetTimer` rounds up to two 15.6 ms system ticks (about 32 fps) and waits
+behind mouse input.
 `--tool previews --select pile|pile-hover|pile-top|overflow|file-drag|file-drag-dock|file-drag-well|drag-close-top|reorder`
 renders it (the pile, overflow and file drag compared with the Tauri
 harness; the drag styles and reorder have no Tauri counterpart). Scrolling,

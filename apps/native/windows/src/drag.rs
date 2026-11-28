@@ -280,9 +280,16 @@ fn set_image(data: &IDataObject, icon: &Icon) {
 /// copy cursor instead of "no drop". `over` hears the pointer's screen
 /// position while the drag is over the window and `None` once it leaves,
 /// so the stack can open a slot under it. Where it lands is decided when
-/// the drag ends ([`landing`] at [`Outcome::point`]).
+/// the drag ends ([`landing`] at [`Outcome::point`]). The shell's drop
+/// target helper keeps drawing the drag image over the stack, as Explorer's
+/// targets do.
 pub fn register_target(hwnd: HWND, over: fn(Option<POINT>) -> bool) {
-    let target: IDropTarget = OwnDrops(over).into();
+    let target: IDropTarget = OwnDrops {
+        over,
+        hwnd,
+        image: unsafe { CoCreateInstance(&CLSID_DragDropHelper, None, CLSCTX_ALL) }.ok(),
+    }
+    .into();
     if let Err(error) = ensure_ole().and_then(|()| unsafe { RegisterDragDrop(hwnd, &target) }) {
         eprintln!("mini preview drop target: {error}");
     }
@@ -295,34 +302,46 @@ pub fn revoke_target(hwnd: HWND) {
 }
 
 #[implement(IDropTarget)]
-struct OwnDrops(fn(Option<POINT>) -> bool);
+struct OwnDrops {
+    over: fn(Option<POINT>) -> bool,
+    hwnd: HWND,
+    /// Draws the source's drag image over this window (`None` where the
+    /// shell has no helper, as under Wine).
+    image: Option<IDropTargetHelper>,
+}
 
 impl OwnDrops_Impl {
-    fn answer(&self, point: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
+    /// Tell the stack where the drag is and answer with the copy cursor for
+    /// its own card. Returns the point and the answer for the image helper.
+    fn answer(&self, point: &POINTL, effect: *mut DROPEFFECT) -> (POINT, DROPEFFECT) {
         let point = POINT {
             x: point.x,
             y: point.y,
         };
         unsafe {
-            *effect = if (self.0)(Some(point)) {
+            *effect = if (self.over)(Some(point)) {
                 DROPEFFECT((*effect).0 & DROPEFFECT_COPY.0)
             } else {
                 DROPEFFECT_NONE
             };
+            (point, *effect)
         }
-        Ok(())
     }
 }
 
 impl IDropTarget_Impl for OwnDrops_Impl {
     fn DragEnter(
         &self,
-        _: Ref<IDataObject>,
+        data: Ref<IDataObject>,
         _: MODIFIERKEYS_FLAGS,
         point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        self.answer(point, effect)
+        let (point, answer) = self.answer(point, effect);
+        if let (Some(image), Some(data)) = (&self.image, data.as_ref()) {
+            let _ = unsafe { image.DragEnter(self.hwnd, data, &point, answer) };
+        }
+        Ok(())
     }
 
     fn DragOver(
@@ -331,22 +350,33 @@ impl IDropTarget_Impl for OwnDrops_Impl {
         point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        self.answer(point, effect)
+        let (point, answer) = self.answer(point, effect);
+        if let Some(image) = &self.image {
+            let _ = unsafe { image.DragOver(&point, answer) };
+        }
+        Ok(())
     }
 
     fn DragLeave(&self) -> Result<()> {
-        (self.0)(None);
+        (self.over)(None);
+        if let Some(image) = &self.image {
+            let _ = unsafe { image.DragLeave() };
+        }
         Ok(())
     }
 
     fn Drop(
         &self,
-        _: Ref<IDataObject>,
+        data: Ref<IDataObject>,
         _: MODIFIERKEYS_FLAGS,
         point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        self.answer(point, effect)
+        let (point, answer) = self.answer(point, effect);
+        if let (Some(image), Some(data)) = (&self.image, data.as_ref()) {
+            let _ = unsafe { image.Drop(data, &point, answer) };
+        }
+        Ok(())
     }
 }
 

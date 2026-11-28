@@ -2821,6 +2821,10 @@ final class MiniPreviewView: NSView {
         guard let current = reorder else { return }
         var offsets = [Double](repeating: 0, count: artifactIDs.count)
         var lift = 0.0, from = 0, to = 0
+        // A card whose file is out hands its closing slot to the reorder, so
+        // the slot reopening and the cards making room never add up.
+        let slot = dragOut.flatMap { $0.id == current.id ? $0.pose.slot : nil } ?? 1
+        captures_preview_reorder_set_slot_v1(current.handle, slot)
         let settled = captures_preview_reorder_frame_v1(current.handle, Self.nowMs, &offsets, offsets.count,
                                                         &lift, &from, &to)
         for (index, id) in artifactIDs.enumerated() { reorderOffsets[id] = CGFloat(offsets[index]) }
@@ -2855,7 +2859,8 @@ final class MiniPreviewView: NSView {
         let active = reorder != nil || dragOut != nil
         guard active || transientLayout else { return }
         transientLayout = active
-        let dragIndex = dragOut.flatMap { artifactIDs.firstIndex(of: $0.id) }
+        // A carried card's slot moves with its reorder instead.
+        let dragIndex = dragOut.flatMap { $0.id == reorder?.id ? nil : artifactIDs.firstIndex(of: $0.id) }
         let shift = dragOut.map { CGFloat(captures_preview_closing_shift_v1($0.pose.slot, anchoredAtTop)) } ?? 0
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for (index, id) in artifactIDs.enumerated() where !exitingArtifactIDs.contains(id) {
