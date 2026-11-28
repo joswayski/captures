@@ -1383,6 +1383,15 @@ pub fn copy_png(path: &std::path::Path) -> std::result::Result<(), String> {
     }
 }
 
+/// Whether the clipboard still holds what `copy_png` last offered: another
+/// app's copy, or clearing the clipboard, takes ownership from the resident
+/// clipboard window. `None` while that cannot be checked right now.
+pub fn owns_clipboard() -> Option<bool> {
+    let owner = RESIDENT.with(|r| Some(r.try_borrow().ok()?.as_ref()?.clipboard))?;
+    let current = unsafe { windows::Win32::System::DataExchange::GetClipboardOwner() };
+    Some(owner.is_some_and(|owner| current.is_ok_and(|current| current == owner)))
+}
+
 /// `CF_DIB`, which the `windows` crate leaves to `Win32_System_Ole`.
 const CF_DIB: u32 = 8;
 

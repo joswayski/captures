@@ -299,7 +299,8 @@ When Show mini previews is on,
 each saved screenshot joins shipping's floating preview stack (`previews.rs`):
 a topmost, non-activating window placed with the shared `thumbnail_geometry`
 on the display under the pointer, hidden while New Capture is open. Cards show
-the size chip and Copied to clipboard; hover blurs and dims the image under
+the size chip and Copied to clipboard (until another app takes the
+clipboard, when Copy returns); hover blurs and dims the image under
 Close and Delete (Delete alone dismisses an unsaved capture; a saved file goes
 to the Recycle Bin), Edit, Copy and Save file / Show in Folder, plus Clear all.
 A stopped recording joins too, as on GTK (the Tauri app showed no recording

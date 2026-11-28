@@ -4720,7 +4720,18 @@ impl Previews {
             return;
         }
         self.stack.reduced = crate::appearance::reduced_motion();
-        if self.stack.sync_presence(&crate::editor::ids(), now_ms()) {
+        let mut changed = self.stack.sync_presence(&crate::editor::ids(), now_ms());
+        // Another app replaced the copied capture: drop "Copied to
+        // clipboard" and bring Copy back.
+        if self.stack.cards.iter().any(|card| card.clipboard)
+            && crate::live::owns_clipboard() == Some(false)
+        {
+            for card in &mut self.stack.cards {
+                card.clipboard = false;
+            }
+            changed = true;
+        }
+        if changed {
             let _ = self.render();
             self.animate();
         }
