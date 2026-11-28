@@ -470,8 +470,12 @@ fn notice(message: &str) {
         .args(["-e", "on run argv\n display alert \"Captures startup recovery\" message (item 1 of argv) buttons {\"OK\"} default button \"OK\"\nend run", message])
         .spawn();
     #[cfg(windows)]
-    let result = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($env:CAPTURES_RECOVERY_MESSAGE, 'Captures startup recovery') | Out-Null"])
+    let result = std::os::windows::process::CommandExt::creation_flags(
+        // Only the message box shows, not a console behind it.
+        &mut Command::new("powershell.exe"),
+        0x0800_0000, // CREATE_NO_WINDOW
+    )
+    .args(["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($env:CAPTURES_RECOVERY_MESSAGE, 'Captures startup recovery') | Out-Null"])
         .env("CAPTURES_RECOVERY_MESSAGE", message)
         .spawn();
     #[cfg(target_os = "linux")]

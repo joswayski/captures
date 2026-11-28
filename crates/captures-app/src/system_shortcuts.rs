@@ -93,7 +93,12 @@ pub struct SystemRunner;
 
 impl Runner for SystemRunner {
     fn run(&mut self, program: &str, args: &[&str]) -> Result<(), RunError> {
-        let output = std::process::Command::new(program)
+        let mut command = std::process::Command::new(program);
+        // The GUI has no console, so Windows would open a visible one (a
+        // Windows Terminal window on Windows 11) for each `reg` at startup.
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
+        let output = command
             .args(args)
             .output()
             .map_err(|error| RunError::Spawn(error.to_string()))?;
